@@ -4,15 +4,16 @@ set -x
 
 # --- Configuration ---
 # Adjust these variables as needed
-LLM_NAME=gpt-4o-mini
+# LLM_NAME=gpt-4o-mini
+LLM_NAME=/home/zhangdi24/Qwen2.5-7B-Instruct
 DOMAIN="gsm8k"
 AGENT_NAMES="MathSolver"
 AGENT_NUMS=4
 BATCH_SIZE=2
 
 # Separate training and testing datasets to avoid data leakage
-TRAIN_DATASET_JSON="datasets/gsm8k/gsm8k_train.jsonl"  # For Phase 1: data generation
-TEST_DATASET_JSON="datasets/gsm8k/gsm8k_test.jsonl"    # For Phase 3: evaluation
+TRAIN_DATASET_JSON="my_datasets/gsm8k/gsm8k_train.jsonl"  # For Phase 1: data generation
+TEST_DATASET_JSON="my_datasets/gsm8k/gsm8k_test.jsonl"    # For Phase 3: evaluation
 
 
 # == Phase 1: Generate initial dataset for GTD models ==

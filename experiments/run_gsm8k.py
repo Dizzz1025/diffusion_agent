@@ -19,7 +19,7 @@ from GDesigner.tools.reader.readers import JSONLReader
 import GDesigner.agents
 from GDesigner.utils.globals import Time
 from GDesigner.utils.globals import Cost, PromptTokens, CompletionTokens
-from datasets.gsm8k_dataset import gsm_data_process,gsm_get_predict
+from my_datasets.gsm8k_dataset import gsm_data_process,gsm_get_predict
 
 from GDesigner.gdt.gtd_framework import GTDFramework
 from GDesigner.gdt.proxy_reward_model import ProxyRewardModel
@@ -29,7 +29,12 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from torch_geometric.utils import dense_to_sparse
+import debugpy
 
+debugpy.listen(("0.0.0.0", 5678))   # 监听调试端口 5678
+print("Waiting for debugger attach on port 5678...")
+debugpy.wait_for_client()           # 等待调试器连上再继续
+print("Debugger attached.")
 def load_result(result_file):
     if not result_file.exists():
         with open(result_file, 'w',encoding='utf-8') as file:
@@ -48,7 +53,7 @@ def load_config(config_path):
     
 def parse_args():
     parser = argparse.ArgumentParser(description="GDesigner Experiments on gsm8k")
-    parser.add_argument("--dataset_json", type=str, default="datasets/gsm8k/gsm8k.jsonl")
+    parser.add_argument("--dataset_json", type=str, default="my_datasets/gsm8k/gsm8k.jsonl")
     parser.add_argument("--result_file", type=str, default=None)
     parser.add_argument("--llm_name", type=str, default="gpt-4o")
     parser.add_argument('--mode', type=str, default='FullConnected',

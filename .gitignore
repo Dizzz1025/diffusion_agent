@@ -21,3 +21,7 @@ ps_list/
 paper/
 HeatMap/
 __pycache__/
+
+my_datasets/gsm8k/*.jsonl
+GDesigner/prompt/*.jsonl
+/all-MiniLM-L6-v2/

@@ -5,7 +5,7 @@ from .agent_registry import AgentRegistry
 from ..llm.llm_registry import LLMRegistry
 from ..prompt.prompt_set_registry import PromptSetRegistry
 from ..tools.coding.python_executor import execute_code_get_return
-from datasets.gsm8k_dataset import gsm_get_predict
+from my_datasets.gsm8k_dataset import gsm_get_predict
 
 @AgentRegistry.register('MathSolver')
 class MathSolver(Node):
