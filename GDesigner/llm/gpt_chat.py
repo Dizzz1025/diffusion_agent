@@ -17,6 +17,8 @@ OPENAI_API_KEYS = ['']
 BASE_URL = ''
 
 load_dotenv()
+print(os.getenv("BASE_URL"))
+print(os.getenv("API_KEY"))
 # Prefer custom names, fallback to standard OpenAI env names
 _RAW_BASE_URL = os.getenv('BASE_URL') or os.getenv('OPENAI_API_BASE')
 _RAW_API_KEY = os.getenv('API_KEY') or os.getenv('OPENAI_API_KEY')
@@ -38,8 +40,10 @@ def _build_chat_endpoint(base_url: Optional[str]) -> str:
     return f"{base_url}/chat/completions"
 
 
-MINE_BASE_URL = _build_chat_endpoint(_RAW_BASE_URL)
-MINE_API_KEYS = _RAW_API_KEY
+# MINE_BASE_URL = _build_chat_endpoint(_RAW_BASE_URL)
+# MINE_API_KEYS = _RAW_API_KEY
+MINE_BASE_URL = "http://127.0.0.1:8000/v1/chat/completions"
+MINE_API_KEYS = "EMPTY"
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
@@ -69,9 +73,21 @@ async def achat(model_name:str, messages:list):
             if 'choices' not in response_data:
                 error_message = response_data.get('error', {}).get('message', 'Unknown error')
                 raise Exception(f"OpenAI API Error: {error_message}")
-            prompt = "".join([item.content for item in messages])
+            # prompt = "".join([item.content for item in messages])
+            # completion = response_data['choices'][0]['message']['content']
+            # cost_count(prompt, completion, model_name)
             completion = response_data['choices'][0]['message']['content']
-            cost_count(prompt, completion, model_name)
+            usage = response_data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+
+            if prompt_tokens is not None:
+                from ..utils.globals import PromptTokens, CompletionTokens
+                PromptTokens.instance().value += prompt_tokens
+                CompletionTokens.instance().value += completion_tokens
+            else:
+                prompt = "".join([item.content for item in messages])
+                cost_count(prompt, completion, model_name)
             return completion
 
 

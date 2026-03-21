@@ -25,3 +25,6 @@ __pycache__/
 my_datasets/gsm8k/*.jsonl
 GDesigner/prompt/*.jsonl
 /all-MiniLM-L6-v2/
+
+*.pth
+*.jsonl

@@ -15,13 +15,17 @@ def cost_count(prompt, response, model_name):
     completion_len: int
     price: float
 
-    prompt_len = cal_token(model_name, prompt)
-    completion_len = cal_token(model_name, response)
+    # prompt_len = cal_token(model_name, prompt)
+    # completion_len = cal_token(model_name, response)
     if "gpt-4" in model_name:
+        prompt_len = cal_token(model_name, prompt)
+        completion_len = cal_token(model_name, response)
         branch = "gpt-4"
         price = prompt_len * OPENAI_MODEL_INFO[branch][model_name]["input"] /1000 + \
                 completion_len * OPENAI_MODEL_INFO[branch][model_name]["output"] /1000
     elif "gpt-3.5" in model_name:
+        prompt_len = cal_token(model_name, prompt)
+        completion_len = cal_token(model_name, response)
         branch = "gpt-3.5"
         price = prompt_len * OPENAI_MODEL_INFO[branch][model_name]["input"] /1000 + \
             completion_len * OPENAI_MODEL_INFO[branch][model_name]["output"] /1000

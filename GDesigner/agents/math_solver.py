@@ -23,7 +23,7 @@ class MathSolver(Node):
         spatial_str = ""
         temporal_str = ""
         user_prompt = self.prompt_set.get_answer_prompt(question=raw_inputs["task"],role=self.role)
-        if self.role == "Math Solver":
+        if self.role == "MathSolver":
             user_prompt += "(Hint: The answer is near to"
             for id, info in spatial_info.items():
                 user_prompt += " "+gsm_get_predict(info["output"])
@@ -54,7 +54,7 @@ class MathSolver(Node):
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
         message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
         response = await self.llm.agen(message)
-        if self.role == "Programming Expert":
+        if self.role == "ProgrammingExpert":
             answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
             response += f"\nthe answer is {answer}"
         print(f"#################system_prompt:{system_prompt}")

@@ -324,7 +324,7 @@ async def run_gtd_experiment(args, dataset):
             true_answer = record["answer"]
 
             # Generate task-specific condition
-            task_condition_embedding = torch.tensor(get_sentence_embedding(task_query)).float().unsqueeze(0).to(device)
+            task_condition_embedding = torch.tensor(get_sentence_embedding(task_query)).float().unsqueeze(0).to(device) # [1, 384]
 
             # Generate topology for this specific task
             generated_A0_probs = gtd_framework.generate_graphs(
@@ -336,7 +336,14 @@ async def run_gtd_experiment(args, dataset):
             )
             # Binarize the generated graph
             generated_adj_matrix = (generated_A0_probs.squeeze(0) > 0.5).int()
-
+            # generated_adj_matrix = torch.tensor([[1 if i != j else 0 for j in range(4)] for i in range(4)]) # FullConnect
+            # generated_adj_matrix = torch.tensor([[1 if i == j + 1 else 0 for i in range(4)] for j in range(4)], dtype=torch.int)
+            # generated_adj_matrix = torch.tensor([
+            #                         [0, 1, 1, 1],
+            #                         [1, 0, 0, 0],
+            #                         [1, 0, 0, 0],
+            #                         [1, 0, 0, 0]
+            #                     ], dtype=torch.int)
             # Create a GDesigner Graph with the generated topology
             gdesigner_graph = Graph(
                 domain=args.domain,
@@ -372,6 +379,9 @@ async def run_gtd_experiment(args, dataset):
         
         print(f"Batch time {time.time() - start_ts:.3f}")
         print(f"Cost {Cost.instance().value}")
+        print(f"PromptTokens {PromptTokens.instance().value}")
+        print(f"CompletionTokens {CompletionTokens.instance().value}")
+        print(f"TotalTokens {PromptTokens.instance().value + CompletionTokens.instance().value}")
 
 async def main():
     args = parse_args()
@@ -392,7 +402,8 @@ async def main():
         Time.instance().value = current_time
         result_dir = Path(f"{GDesigner_ROOT}/result/gsm8k")
         result_dir.mkdir(parents=True, exist_ok=True)
-        result_file = result_dir / f"{args.domain}_{args.llm_name}_{current_time}.json"
+        model_tag = os.path.basename(args.llm_name.rstrip("/"))
+        result_file = result_dir / f"{args.domain}_{model_tag}_{current_time}.json"
         
         agent_names = [name for name,num in zip(args.agent_names,args.agent_nums) for _ in range(num)]
         decision_method = args.decision_method
@@ -531,7 +542,8 @@ def get_kwargs(mode:Union[Literal['DirectAnswer'],Literal['FullConnected'],Liter
     if mode=='DirectAnswer':
         fixed_spatial_masks = [[0]]
         fixed_temporal_masks = [[0]]
-        node_kwargs = [{'role':'Programming Expert'}]
+        # node_kwargs = [{'role':'Programming Expert'}]
+        node_kwargs = [{'role':'MathSolver'}]
     elif mode=='FullConnected':
         fixed_spatial_masks = [[1 if i!=j else 0 for i in range(N)] for j in range(N)]
         fixed_temporal_masks = [[1 for _ in range(N)] for _ in range(N)]
