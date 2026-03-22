@@ -236,25 +236,25 @@ class Graph(ABC):
         self.nodes[node_id] = node
         return node
     
-    def init_nodes(self):
-        """
-        Creates and adds new nodes to the graph.
-        """
-        for agent_name,kwargs in zip(self.agent_names,self.node_kwargs):
-            if agent_name in AgentRegistry.keys():
-                kwargs["domain"] = self.domain
-                kwargs["llm_name"] = self.llm_name
-                agent_instance = AgentRegistry.get(agent_name, **kwargs)
-                self.add_node(agent_instance)
+    # def init_nodes(self):
+    #     """
+    #     Creates and adds new nodes to the graph.
+    #     """
+    #     for agent_name,kwargs in zip(self.agent_names,self.node_kwargs):
+    #         if agent_name in AgentRegistry.keys():
+    #             kwargs["domain"] = self.domain
+    #             kwargs["llm_name"] = self.llm_name
+    #             agent_instance = AgentRegistry.get(agent_name, **kwargs)
+    #             self.add_node(agent_instance)
     
-    def init_potential_edges(self):
-        """
-        Creates and potential edges to the graph.
-        """
-        for node1_id in self.nodes.keys():
-            for node2_id in self.nodes.keys():
-                self.potential_spatial_edges.append([node1_id,node2_id])
-                self.potential_temporal_edges.append([node1_id,node2_id])
+    # def init_potential_edges(self):
+    #     """
+    #     Creates and potential edges to the graph.
+    #     """
+    #     for node1_id in self.nodes.keys():
+    #         for node2_id in self.nodes.keys():
+    #             self.potential_spatial_edges.append([node1_id,node2_id])
+    #             self.potential_temporal_edges.append([node1_id,node2_id])
 
     def clear_spatial_connection(self):
         """
@@ -464,9 +464,9 @@ class Graph(ABC):
             try:
                 # First try the agent_name directly
                 node = AgentRegistry.get(agent_name, domain=self.domain, llm_name=self.llm_name, **node_kwargs)
-                node_id = f"{agent_name}_{i}"
-                self.nodes[node_id] = node
-                print(f"Debug: Created node {node_id} with role {node.role}")
+                node.id = f"{agent_name}_{i}"
+                self.nodes[node.id] = node
+                print(f"Debug: Created node {node.id} with role {node.role}")
             except Exception as e:
                 print(f"Debug: Direct agent creation failed for {agent_name}: {e}")
                 # Try some common fallback agent types

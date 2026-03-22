@@ -10,17 +10,21 @@ from memory.memory_bank import MemoryBank
 from policy.graph_policy import GraphPolicy
 from policy.graph_sampler import GraphSampler
 from rl.trainer import RLTrainer
+import random
+import os
+import json
 
-import debugpy
+# import debugpy
 
-debugpy.listen(("0.0.0.0", 5678))   # 监听调试端口 5678
-print("Waiting for debugger attach on port 5678...")
-debugpy.wait_for_client()           # 等待调试器连上再继续
-print("Debugger attached.")
+# debugpy.listen(("0.0.0.0", 5678))   # 监听调试端口 5678
+# print("Waiting for debugger attach on port 5678...")
+# debugpy.wait_for_client()           # 等待调试器连上再继续
+# print("Debugger attached.")
 
 async def main():
     dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    llm_name = "Meta-Llama-3.1-8B-Instruct"
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1
@@ -31,8 +35,14 @@ async def main():
     adapter = GSM8KAdapter()
     tasks = adapter.load_tasks(dataset_json)
 
-    memory_bank = MemoryBank(max_size=200)
+    memory_bank = MemoryBank(max_size=50)
 
+    node_kwargs = [
+    {'role': 'MathSolver'},
+    {'role': 'ProblemDecomposer'},
+    {'role': 'CalculationChecker'},
+    {'role': 'ProgrammingExpert'},
+    ]
     executor = MultiAgentExecutor(
         domain=domain,
         llm_name=llm_name,
@@ -42,7 +52,7 @@ async def main():
         task_adapter=adapter,
         optimized_spatial=False,
         optimized_temporal=False,
-        node_kwargs=None,
+        node_kwargs=node_kwargs,
     )
 
     reward_calculator = RewardCalculator(
@@ -60,17 +70,30 @@ async def main():
     )
 
     policy = GraphPolicy(
-        state_dim=128,
+        state_dim=384,
         hidden_dim=256,
         num_agents=len(agent_names),
     )
 
     sampler = GraphSampler()
     trainer = RLTrainer(env, policy, sampler, memory_bank, lr=1e-3)
+    history = []
+    save_dir = "results/train_vis"
+    os.makedirs(save_dir, exist_ok=True)
 
-    for epoch in range(100):
+    for epoch in range(10):
         metrics = await trainer.train_one_episode()
-        if epoch % 10 == 0:
+        record = {
+            "epoch": epoch,
+            "reward": float(metrics["reward"]),
+            "correct": int(metrics["correct"]),
+            "total_tokens": float(metrics["total_tokens"]),
+            "used_memory": int(metrics["used_memory"]),
+            "loss": float(metrics["loss"]),
+        }
+        history.append(record)
+
+        if epoch % 2 == 0:
             print(
                 f"Epoch={epoch} | "
                 f"reward={metrics['reward']:.4f} | "
@@ -79,7 +102,9 @@ async def main():
                 f"used_memory={metrics['used_memory']} | "
                 f"loss={metrics['loss']:.4f}"
             )
-
+        
+        with open(os.path.join(save_dir, "train_history.json"), "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
     asyncio.run(main())

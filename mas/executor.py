@@ -75,7 +75,7 @@ class MultiAgentExecutor:
         )
 
         input_dict = self.task_adapter.build_input_dict(task)
-        raw_answer, log_prob = await graph.arun(input_dict, self.num_rounds)
+        raw_answer, log_prob = await graph.arun(input_dict, self.num_rounds) # 如果不是从概率图中采样出图结构，log_prob会返回0
 
         # 任务评估交给 adapter
         eval_result = self.task_adapter.evaluate_answer(raw_answer, task)
