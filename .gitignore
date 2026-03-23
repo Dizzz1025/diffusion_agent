@@ -12,7 +12,7 @@
 .env
 experiments.md
 agent5_token.md
-test.py
+# test.py
 
 token/
 attack/
@@ -28,3 +28,5 @@ GDesigner/prompt/*.jsonl
 
 *.pth
 *.jsonl
+
+results/

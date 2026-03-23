@@ -13,6 +13,7 @@ from rl.trainer import RLTrainer
 import random
 import os
 import json
+import torch
 
 # import debugpy
 
@@ -80,6 +81,14 @@ async def main():
     save_dir = "results/train_vis"
     os.makedirs(save_dir, exist_ok=True)
 
+    best_reward = float('-inf')
+    ckpt_dir = os.path.join(save_dir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    best_reward = float('-inf')
+    ckpt_dir = os.path.join(save_dir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+
     for epoch in range(100):
         metrics = await trainer.train_one_episode()
         record = {
@@ -104,6 +113,25 @@ async def main():
         
         with open(os.path.join(save_dir, "train_history.json"), "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
+        
+        if metrics["reward"] > best_reward:
+            best_reward = float(metrics["reward"])
+            best_ckpt = {
+                "epoch": epoch,
+                "policy_state_dict": policy.state_dict(),
+                "optimizer_state_dict": trainer.optimizer.state_dict(),
+                "best_reward": best_reward,
+                "history": history,
+                "config": {
+                    "dataset_json": dataset_json,
+                    "llm_name": llm_name,
+                    "domain": domain,
+                    "decision_method": decision_method,
+                    "num_rounds": num_rounds,
+                    "agent_names": agent_names,
+                }
+            }
+            torch.save(best_ckpt, os.path.join(ckpt_dir, "best.pt"))
 
 if __name__ == "__main__":
     asyncio.run(main())
