@@ -23,7 +23,6 @@ import json
 
 async def main():
     dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
     llm_name = "Meta-Llama-3.1-8B-Instruct"
     domain = "gsm8k"
     decision_method = "FinalRefer"
@@ -81,7 +80,7 @@ async def main():
     save_dir = "results/train_vis"
     os.makedirs(save_dir, exist_ok=True)
 
-    for epoch in range(10):
+    for epoch in range(100):
         metrics = await trainer.train_one_episode()
         record = {
             "epoch": epoch,
@@ -93,7 +92,7 @@ async def main():
         }
         history.append(record)
 
-        if epoch % 2 == 0:
+        if epoch % 10 == 0:
             print(
                 f"Epoch={epoch} | "
                 f"reward={metrics['reward']:.4f} | "
