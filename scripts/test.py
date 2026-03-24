@@ -13,10 +13,10 @@ from policy.graph_sampler import GraphSampler
 
 import debugpy
 
-debugpy.listen(("0.0.0.0", 5678))   # 监听调试端口 5678
-print("Waiting for debugger attach on port 5678...")
-debugpy.wait_for_client()           # 等待调试器连上再继续
-print("Debugger attached.")
+# debugpy.listen(("0.0.0.0", 5678))   # 监听调试端口 5678
+# print("Waiting for debugger attach on port 5678...")
+# debugpy.wait_for_client()           # 等待调试器连上再继续
+# print("Debugger attached.")
 
 async def evaluate_one_task(env, policy, sampler, task):
     """
@@ -96,7 +96,7 @@ async def main():
     # ===== 构建任务适配器与测试集 =====
     adapter = GSM8KAdapter()
     tasks = adapter.load_tasks(dataset_json)
-    tasks = tasks[:10]
+    # tasks = tasks[:10]
     # 当前测试脚本先用空 memory bank
     memory_bank = MemoryBank(max_size=50)
 
