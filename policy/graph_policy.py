@@ -24,6 +24,8 @@ class GraphPolicy(nn.Module):
         # 哪些边保留
         self.edge_head = nn.Linear(hidden_dim, num_agents * num_agents)
 
+        self.value_head = nn.Linear(hidden_dim, 1)
+
     def forward(self, state_vec):
         h = self.backbone(state_vec)
 
@@ -34,5 +36,6 @@ class GraphPolicy(nn.Module):
         return {
             "use_memory_logit": use_memory_logit,
             "node_logits": node_logits,
-            "edge_logits": edge_logits
+            "edge_logits": edge_logits,
+            "value": self.value_head(h).squeeze(-1) # [B]
         }

@@ -26,3 +26,25 @@ class GraphSampler:
             "edge_mask": edge_mask[0].int().tolist(),
         }
         return action, logprob
+    
+    def evaluate_actions(self, policy_output, action):
+        use_memory_dist = Bernoulli(logits=policy_output["use_memory_logit"])
+        node_dist = Bernoulli(logits=policy_output["node_logits"])
+        edge_dist = Bernoulli(logits=policy_output["edge_logits"])
+
+        use_memory = action["use_memory"]
+        node_mask = action["node_mask"]
+        edge_mask = action["edge_mask"]
+
+        logprob = (
+            use_memory_dist.log_prob(use_memory).sum(dim=-1)
+            + node_dist.log_prob(node_mask).sum(dim=-1)
+            + edge_dist.log_prob(edge_mask).sum(dim=[1, 2])
+        )
+
+        entropy = (
+            use_memory_dist.entropy().sum(dim=-1)
+            + node_dist.entropy().sum(dim=-1)
+            + edge_dist.entropy().sum(dim=[1, 2])
+        )
+        return logprob, entropy

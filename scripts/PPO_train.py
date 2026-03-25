@@ -1,6 +1,9 @@
 # scripts/train.py
 
 import asyncio
+import os
+import json
+import torch
 
 from tasks.gsm8k_adapter import GSM8KAdapter
 from mas.executor import MultiAgentExecutor
@@ -9,41 +12,37 @@ from env.task_env import MultiAgentGraphEnv
 from memory.memory_bank import MemoryBank
 from policy.graph_policy import GraphPolicy
 from policy.graph_sampler import GraphSampler
-from diffusion_agent.rl.reinforce_trainer import RLTrainer
-import random
-import os
-import json
-import torch
-
-# import debugpy
-
-# debugpy.listen(("0.0.0.0", 5678))   # 监听调试端口 5678
-# print("Waiting for debugger attach on port 5678...")
-# debugpy.wait_for_client()           # 等待调试器连上再继续
-# print("Debugger attached.")
+from rl.PPO_trainer import PPOTrainer  # 假设你已经实现了 PPOTrainer
 
 async def main():
+    # ------------------------------
+    # 1. 配置数据和模型
+    # ------------------------------
     dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    # llm_name = "Meta-Llama-3.1-8B-Instruct"
     llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1
 
-    # 先固定 agent 配置
+    # ------------------------------
+    # 2. 初始化 Agent 配置
+    # ------------------------------
     agent_names = ["MathSolver", "MathSolver", "MathSolver", "MathSolver"]
+    node_kwargs = [
+        {'role': 'MathSolver'},
+        {'role': 'ProblemDecomposer'},
+        {'role': 'CalculationChecker'},
+        {'role': 'ProgrammingExpert'},
+    ]
 
+    # ------------------------------
+    # 3. 数据加载和环境构建
+    # ------------------------------
     adapter = GSM8KAdapter()
     tasks = adapter.load_tasks(dataset_json)
 
     memory_bank = MemoryBank(max_size=50)
 
-    node_kwargs = [
-    {'role': 'MathSolver'},
-    {'role': 'ProblemDecomposer'},
-    {'role': 'CalculationChecker'},
-    {'role': 'ProgrammingExpert'},
-    ]
     executor = MultiAgentExecutor(
         domain=domain,
         llm_name=llm_name,
@@ -70,6 +69,9 @@ async def main():
         memory_bank=memory_bank,
     )
 
+    # ------------------------------
+    # 4. 初始化图策略和采样器
+    # ------------------------------
     policy = GraphPolicy(
         state_dim=384,
         hidden_dim=256,
@@ -77,48 +79,69 @@ async def main():
     )
 
     sampler = GraphSampler()
-    trainer = RLTrainer(env, policy, sampler, memory_bank, lr=1e-3)
+
+    # ------------------------------
+    # 5. 初始化 PPO Trainer
+    # ------------------------------
+    trainer = PPOTrainer(
+        env=env,
+        policy=policy,
+        sampler=sampler,
+        memory_bank=memory_bank,
+        lr=1e-4,
+        clip_eps=0.2,
+        value_coef=0.5,
+        entropy_coef=0.01,
+        ppo_epochs=4,
+        batch_size=16,
+        rollout_size=32,  # 每次收集32道题作为一个batch
+    )
+
+    # ------------------------------
+    # 6. 训练保存配置
+    # ------------------------------
     history = []
     save_dir = "results/train_vis"
     os.makedirs(save_dir, exist_ok=True)
 
-    best_reward = float('-inf')
     ckpt_dir = os.path.join(save_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
     best_reward = float('-inf')
-    ckpt_dir = os.path.join(save_dir, "checkpoints")
-    os.makedirs(ckpt_dir, exist_ok=True)
 
-    for epoch in range(100):
-        metrics = await trainer.train_one_episode()
+    # ------------------------------
+    # 7. 主训练循环
+    # ------------------------------
+    num_iterations = 100
+    for it in range(num_iterations):
+        metrics = await trainer.train_one_iteration()  # PPO：收集一批 rollout + update
+
+        # 保存训练历史
         record = {
-            "epoch": epoch,
-            "reward": float(metrics["reward"]),
-            "correct": int(metrics["correct"]),
-            "total_tokens": float(metrics["total_tokens"]),
-            "used_memory": int(metrics["used_memory"]),
-            "loss": float(metrics["loss"]),
+            "iteration": it,
+            "avg_reward": float(metrics["avg_reward"]),
+            "avg_correct": int(metrics["avg_correct"]),
+            "avg_tokens": float(metrics["avg_tokens"]),
         }
         history.append(record)
 
-        if epoch % 10 == 0:
-            print(
-                f"Epoch={epoch} | "
-                f"reward={metrics['reward']:.4f} | "
-                f"correct={metrics['correct']} | "
-                f"tokens={metrics['total_tokens']} | "
-                f"used_memory={metrics['used_memory']} | "
-                f"loss={metrics['loss']:.4f}"
-            )
-        
         with open(os.path.join(save_dir, "train_history.json"), "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
-        
-        if metrics["reward"] > best_reward:
-            best_reward = float(metrics["reward"])
+
+        # 打印日志
+        if it % 5 == 0:
+            print(
+                f"Iter={it} | "
+                f"avg_reward={metrics['avg_reward']:.4f} | "
+                f"avg_correct={metrics['avg_correct']} | "
+                f"avg_tokens={metrics['avg_tokens']:.2f}"
+            )
+
+        # 保存最佳模型
+        if metrics["avg_reward"] > best_reward:
+            best_reward = metrics["avg_reward"]
             best_ckpt = {
-                "epoch": epoch,
+                "iteration": it,
                 "policy_state_dict": policy.state_dict(),
                 "optimizer_state_dict": trainer.optimizer.state_dict(),
                 "best_reward": best_reward,
