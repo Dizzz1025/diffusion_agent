@@ -5,7 +5,7 @@ import numpy as np
 from typing import Dict, List, Optional
 
 from memory.memory_bank import MemoryBank
-from mas.executor import MultiAgentExecutor
+from diffusion_agent.mas.executor_GTD import MultiAgentExecutor
 from env.reward import RewardCalculator
 from tasks.base_adapter import BaseTaskAdapter
 
