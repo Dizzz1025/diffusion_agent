@@ -282,7 +282,7 @@ class TrajectoryMemoryBank:
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         with path_obj.open("w", encoding="utf-8") as f:
             for item in self.items:
-                FWRITE_SENTINEL
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     def load_jsonl(self, path: str) -> None:
         path_obj = Path(path)

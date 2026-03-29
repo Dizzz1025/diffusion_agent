@@ -33,12 +33,13 @@ class RouterSampler:
         if edge_probs.dim() == 3:
             edge_probs = edge_probs[0]
 
-        node_mask = (node_probs >= self.node_threshold).float()
+        node_mask = (node_probs >= self.node_threshold).float() # node_mask.shape = [4]
         if last_agent is None:
             valid = node_mask.clone()
         else:
             valid = ((edge_probs[int(last_agent)] >= self.edge_threshold).float() * node_mask)
-
+        
+        # 如果边和节点的约束下一个候选结果都没了，就退回到“基于节点的宽松可选”
         if valid.sum() <= 0:
             valid = node_probs.clone()
             if last_agent is not None:
@@ -99,7 +100,7 @@ class RouterSampler:
             "selected_local_idx": picked,
             "selection_score": float(masked_logits[0, picked].item()),
             "selection_prob": float(probs[0, picked].item()),
-            "allowed_by_graph": bool(valid_agent_mask[0, picked].item() > 0),
+            "allowed_by_graph": bool(valid_agent_mask[picked].item() > 0),
             "logprob": logprob,
             "entropy": entropy,
             "use_stop_logprob": use_stop_logprob,

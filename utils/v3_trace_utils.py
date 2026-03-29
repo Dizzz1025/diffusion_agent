@@ -84,7 +84,7 @@ def build_task_agent_runtime(
 ) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]], torch.Tensor]:
     agent_names, node_kwargs = resolve_task_agent_config(task, default_agent_names, default_node_kwargs)
     agent_pool = build_agent_pool(agent_names, node_kwargs)
-    agent_embeddings = build_agent_profile_embeddings_from_pool(agent_pool)
+    agent_embeddings = build_agent_profile_embeddings_from_pool(agent_pool) # [1, 4, 384]
     for idx, emb in enumerate(agent_embeddings[0].detach().cpu().tolist()):
         if idx < len(agent_pool):
             agent_pool[idx]["agent_embedding"] = deepcopy(emb)

@@ -52,7 +52,7 @@ class RouterPolicy(nn.Module):
         if edge_probs.dim() == 2:
             edge_probs = edge_probs.unsqueeze(0)
 
-        num_agents = node_probs.size(-1)
+        num_agents = node_probs.size(-1) # node_probs.size() = (1, 4)
         device = task_embedding.device
         visits = torch.tensor(visit_counts, dtype=torch.float32, device=device).unsqueeze(0)
         if visits.size(-1) != num_agents:

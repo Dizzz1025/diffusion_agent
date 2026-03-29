@@ -8,7 +8,7 @@ import torch
 from GDesigner.llm.profile_embedding import get_sentence_embedding
 
 from env.reward_v3 import V3RewardCalculator
-from diffusion_agent.mas.executor_GTD import MultiAgentExecutor
+from mas.executor import MultiAgentExecutor
 from memory.trajectory_memory_bank import TrajectoryMemoryBank
 from tasks.base_adapter import BaseTaskAdapter
 from utils.v3_trace_utils import (

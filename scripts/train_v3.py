@@ -24,7 +24,12 @@ from utils.v3_trace_utils import (
 )
 
 from GDesigner.llm.profile_embedding import get_sentence_embedding
+import debugpy
 
+debugpy.listen(("0.0.0.0", 5678))
+print("Waiting for debugger attach on port 5678...")
+debugpy.wait_for_client()
+print("Debugger attached.")
 
 def build_agent_profile_embeddings(node_kwargs: List[Dict], fallback_names: List[str]) -> torch.Tensor:
     texts = []
@@ -108,7 +113,7 @@ async def train_graph_generator_from_memory(
         total_loss = 0.0
         num_batches = 0
         for idx, item in enumerate(memory_bank.items):
-            item_agent_pool = item.get("agent_pool", current_agent_pool)
+            item_agent_pool = item.get("agent_pool", current_agent_pool) ## TODO: 感觉写反了
             item_agent_names = [x.get("agent_name", f"Agent{i}") for i, x in enumerate(item_agent_pool)]
             item_node_kwargs = [
                 {"role": x.get("agent_role", x.get("agent_name", f"Agent{i}")), "desc": x.get("agent_desc", x.get("agent_role", x.get("agent_name", f"Agent{i}")))}
@@ -124,7 +129,7 @@ async def train_graph_generator_from_memory(
                 current_agent_pool=item_agent_pool,
                 top_k=top_k,
                 fallback_item=item,
-                exclude_index=idx,
+                exclude_index=idx, # 构建标签时排除当前样本，避免自己给自己做标签
             )
             summary = memory_bank.summarize(
                 task_embedding=item["task_embedding"],
@@ -154,7 +159,8 @@ async def train_graph_generator_from_memory(
 
 async def main():
     dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    llm_name = 'Meta-Llama-3.1-8B-Instruct'
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1
@@ -196,19 +202,20 @@ async def main():
 
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
 
-    memory_bank = TrajectoryMemoryBank(max_size=500)
-    await bootstrap_memory_bank(
-        tasks=tasks,
-        task_adapter=adapter,
-        executor=executor,
-        reward_calculator=reward_calculator,
-        memory_bank=memory_bank,
-        default_agent_names=agent_names,
-        default_node_kwargs=node_kwargs,
-        bootstrap_task_limit=30,
-        keep_top_k_per_task=2,
-    )
-    memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
+    memory_bank = TrajectoryMemoryBank(max_size=10)
+    # await bootstrap_memory_bank(
+    #     tasks=tasks,
+    #     task_adapter=adapter,
+    #     executor=executor,
+    #     reward_calculator=reward_calculator,
+    #     memory_bank=memory_bank,
+    #     default_agent_names=agent_names,
+    #     default_node_kwargs=node_kwargs,
+    #     bootstrap_task_limit=1,
+    #     keep_top_k_per_task=2,
+    # )
+    # memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
+    memory_bank.load_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
 
     task_dim = len(memory_bank.items[0]["task_embedding"]) if len(memory_bank) > 0 else 384
     graph_generator = GraphGenerator(

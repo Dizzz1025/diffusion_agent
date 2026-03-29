@@ -246,6 +246,7 @@ class MultiAgentExecutor:
                 id=f"{node_id}#step{step_idx}",
                 node_id=node_id,
                 local_idx=agent_idx,
+                role=getattr(current_node, "role", None),
                 outputs=deepcopy(current_node.outputs),
             )
             executed_step_snapshots.append(snapshot)
@@ -261,7 +262,7 @@ class MultiAgentExecutor:
 
         graph.decision_node.spatial_predecessors = list(executed_step_snapshots)
         graph.decision_node.temporal_predecessors = []
-        graph.decision_node.execute(input_dict)
+        await graph.decision_node.async_execute(input_dict)
         raw_answer = graph.decision_node.outputs
         if len(raw_answer) == 0:
             raw_answer = ["No answer of the decision node"]
