@@ -246,14 +246,23 @@ def bootstrap_candidate_traces(num_agents: int) -> List[List[int]]:
 
     agents = list(range(num_agents))
     last = num_agents - 1
+    # traces = [
+    #     agents,
+    #     agents[:-1] + [max(0, last - 1), last],
+    #     [0, 1, 0, last] if num_agents >= 2 else [0],
+    #     [0, 1, 2, 1, last] if num_agents >= 4 else agents,
+    #     [1, 0, 2, last] if num_agents >= 4 else agents,
+    #     [1, 0, 2, 0, last] if num_agents >= 4 else agents,
+    #     [0, 2, 1, last] if num_agents >= 4 else agents,
+    # ]
+    # 0=MathSolver, 1=ProblemDecomposer, 2=CalculationChecker, 3=ProgrammingExpert
     traces = [
-        agents,
-        agents[:-1] + [max(0, last - 1), last],
-        [0, 1, 0, last] if num_agents >= 2 else [0],
-        [0, 1, 2, 1, last] if num_agents >= 4 else agents,
-        [1, 0, 2, last] if num_agents >= 4 else agents,
-        [1, 0, 2, 0, last] if num_agents >= 4 else agents,
-        [0, 2, 1, last] if num_agents >= 4 else agents,
+        [1, 0, 2],
+        [1, 0, 2, 0],
+        [0, 2],
+        [1, 3, 0, 2],
+        [1, 0, 3, 2],
+        [0, 1, 0, 2],
     ]
 
     cleaned = []
