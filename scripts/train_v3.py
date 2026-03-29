@@ -218,23 +218,23 @@ async def main():
     # memory_bank.load_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
 
     task_dim = len(memory_bank.items[0]["task_embedding"]) if len(memory_bank) > 0 else 384
-    graph_generator = GraphGenerator(
-        task_dim=task_dim,
-        agent_dim=agent_profile_embeddings.size(-1),
-        hidden_dim=256,
-        num_agents=len(agent_names),
-    )
+    # graph_generator = GraphGenerator(
+    #     task_dim=task_dim,
+    #     agent_dim=agent_profile_embeddings.size(-1),
+    #     hidden_dim=256,
+    #     num_agents=len(agent_names),
+    # )
 
-    await train_graph_generator_from_memory(
-        graph_generator=graph_generator,
-        memory_bank=memory_bank,
-        default_agent_profile_embeddings=agent_profile_embeddings,
-        current_agent_pool=build_task_agent_runtime(tasks[0] if tasks else {}, agent_names, node_kwargs)[2],
-        epochs=15,
-        top_k=5,
-        lr=1e-3,
-    )
-    torch.save(graph_generator.state_dict(), ckpt_dir / "graph_generator.pt")
+    # await train_graph_generator_from_memory(
+    #     graph_generator=graph_generator,
+    #     memory_bank=memory_bank,
+    #     default_agent_profile_embeddings=agent_profile_embeddings,
+    #     current_agent_pool=build_task_agent_runtime(tasks[0] if tasks else {}, agent_names, node_kwargs)[2],
+    #     epochs=15,
+    #     top_k=5,
+    #     lr=1e-3,
+    # )
+    # torch.save(graph_generator.state_dict(), ckpt_dir / "graph_generator.pt")
 
     router_sampler = RouterSampler(node_threshold=0.35, edge_threshold=0.35)
     env = MultiAgentGraphV3Env(
@@ -243,7 +243,7 @@ async def main():
         executor=executor,
         reward_calculator=reward_calculator,
         memory_bank=memory_bank,
-        graph_generator=graph_generator,
+        graph_generator=None,
         agent_profile_embeddings=agent_profile_embeddings,
         top_k_memory=5,
         node_threshold=router_sampler.node_threshold,
