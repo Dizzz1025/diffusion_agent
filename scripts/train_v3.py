@@ -276,7 +276,7 @@ async def main():
     history = []
     best_reward_mean = float("-inf")
     num_updates = 50
-    batch_episodes = 1
+    batch_episodes = 16
 
     print("[V3] Step 6-8: train router under graph constraints and execute the selected trace directly.")
     for update_idx in range(num_updates):
