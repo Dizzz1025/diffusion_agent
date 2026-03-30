@@ -132,7 +132,7 @@ class RouterPPOTrainer:
             trace = [build_trace_step(0, state["agent_pool"], step_idx=0)]
 
         reward, info = await self.env.execute_trace(trace)
-        returns, advantages = self._compute_returns_and_advantages(transitions, float(reward))
+        returns, advantages = self._compute_returns_and_advantages(transitions, float(reward), normalize_advantage=False)
         return {
             "trace": trace,
             "reward": reward,
@@ -142,7 +142,8 @@ class RouterPPOTrainer:
             "advantages": advantages,
         }
 
-    def _compute_returns_and_advantages(self, transitions: List[PPORouterTransition], final_reward: float):
+    def _compute_returns_and_advantages(self, transitions: List[PPORouterTransition], final_reward: float,
+                                        normalize_advantage: bool = True):
         if len(transitions) == 0:
             return torch.tensor([], dtype=torch.float32), torch.tensor([], dtype=torch.float32)
 
@@ -164,7 +165,7 @@ class RouterPPOTrainer:
 
         returns = torch.tensor(list(reversed(returns)), dtype=torch.float32)
         advantages = torch.tensor(list(reversed(advantages)), dtype=torch.float32)
-        if self.advantage_norm and advantages.numel() > 1:
+        if normalize_advantage and self.advantage_norm and advantages.numel() > 1:
             advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
         return returns, advantages
 
@@ -272,6 +273,7 @@ class RouterPPOTrainer:
         result = episode["info"]["result"]
         route_stats = episode["info"]["route_stats"]
         return {
+            "task_id": state.get("task_id"),
             "reward": float(episode["reward"]),
             "correct": int(result["correct"]),
             "total_tokens": float(result["total_tokens"]),
@@ -282,6 +284,39 @@ class RouterPPOTrainer:
             **ppo_stats,
         }
 
+    async def train_batch(self, batch_episodes: int = 16) -> Dict:
+        episodes = []
+
+        for _ in range(batch_episodes):
+            state = self.env.reset()
+            episode = await self.rollout_trace(state)
+            episode["state"] = state
+            episodes.append(episode)
+
+        batch_transitions, batch_returns, batch_advantages = self._merge_episode_batch(episodes)
+        ppo_stats = self.ppo_update(batch_transitions, batch_returns, batch_advantages)
+
+        # memory 还是按 episode 写回
+        for ep in episodes:
+            self.update_memory(ep["info"], ep["reward"])
+
+        rewards = [float(ep["reward"]) for ep in episodes]
+        corrects = [int(ep["info"]["result"]["correct"]) for ep in episodes]
+        tokens = [float(ep["info"]["result"]["total_tokens"]) for ep in episodes]
+        steps = [int(ep["info"]["route_stats"]["steps"]) for ep in episodes]
+        deadloops = [int(ep["info"]["route_stats"]["deadloops"]) for ep in episodes]
+
+        return {
+            "batch_episodes": len(episodes),
+            "num_transitions": len(batch_transitions),
+            "reward_mean": sum(rewards) / max(1, len(rewards)),
+            "correct_rate": sum(corrects) / max(1, len(corrects)),
+            "token_mean": sum(tokens) / max(1, len(tokens)),
+            "steps_mean": sum(steps) / max(1, len(steps)),
+            "deadloops_mean": sum(deadloops) / max(1, len(deadloops)),
+            **ppo_stats,
+        }
+    
     def update_memory(self, info: Dict, reward: float) -> None:
         result = info["result"]
         trace = info["trace"]
@@ -304,3 +339,26 @@ class RouterPPOTrainer:
             "num_agents": len(info["agent_pool"]),
         }
         self.memory_bank.add(item)
+
+    def _merge_episode_batch(self, episodes: List[Dict]):
+        all_transitions: List[PPORouterTransition] = []
+        returns_list = []
+        advantages_list = []
+
+        for ep in episodes:
+            if len(ep["transitions"]) == 0:
+                continue
+            all_transitions.extend(ep["transitions"])
+            returns_list.append(ep["returns"])
+            advantages_list.append(ep["advantages"])
+
+        if len(all_transitions) == 0:
+            return [], torch.tensor([], dtype=torch.float32), torch.tensor([], dtype=torch.float32)
+
+        returns = torch.cat(returns_list, dim=0)
+        advantages = torch.cat(advantages_list, dim=0)
+
+        if self.advantage_norm and advantages.numel() > 1:
+            advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
+
+        return all_transitions, returns, advantages

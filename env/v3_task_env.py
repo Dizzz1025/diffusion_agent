@@ -32,6 +32,7 @@ class MultiAgentGraphV3Env:
         graph_generator=None,
         agent_profile_embeddings: Optional[torch.Tensor] = None,
         top_k_memory: int = 5,
+        task_sampling_mode="random", # "random" / "sequential"
         node_threshold: float = 0.35,
         edge_threshold: float = 0.35,
     ):
@@ -45,6 +46,8 @@ class MultiAgentGraphV3Env:
         self.top_k_memory = top_k_memory
         self.node_threshold = node_threshold
         self.edge_threshold = edge_threshold
+        self.task_sampling_mode = task_sampling_mode
+        self.current_task_idx = None
 
         self.default_agent_profile_embeddings = agent_profile_embeddings
         self.current_task = None
@@ -72,7 +75,17 @@ class MultiAgentGraphV3Env:
         }
 
     def reset(self) -> Dict:
-        self.current_task = random.choice(self.tasks)
+        if self.task_sampling_mode == "random":
+            self.current_task_idx = random.randrange(len(self.tasks))
+            self.current_task = self.tasks[self.current_task_idx]
+        elif self.task_sampling_mode == "sequential":
+            if self.current_task_idx is None:
+                self.current_task_idx = 0
+            else:
+                self.current_task_idx = (self.current_task_idx + 1) % len(self.tasks)
+            self.current_task = self.tasks[self.current_task_idx]
+        else:
+            raise ValueError(f"Unsupported task_sampling_mode: {self.task_sampling_mode}")
         task_text = self.task_adapter.get_task_text(self.current_task)
         self.current_task_embedding = self.encode_task(task_text)
 
@@ -105,6 +118,7 @@ class MultiAgentGraphV3Env:
 
         return {
             "task": self.current_task,
+            "task_id": self.current_task_idx,
             "task_embedding": self.current_task_embedding,
             "memory_summary": self.current_summary,
             "graph_prior": self.current_graph_prior,

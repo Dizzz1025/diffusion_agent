@@ -173,7 +173,7 @@ async def main():
         {"role": "ProgrammingExpert"},
     ]
 
-    save_dir = Path("results/v3")
+    save_dir = Path("results/v5")
     ckpt_dir = save_dir / "checkpoints"
     save_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -193,29 +193,35 @@ async def main():
         node_kwargs=node_kwargs,
     )
 
+    # reward_calculator = V3RewardCalculator(
+    #     alpha_correctness=1.0,
+    #     beta_tokens=0.001,
+    #     gamma_steps=0.05,
+    #     delta_deadloop=0.10,
+    # )
     reward_calculator = V3RewardCalculator(
         alpha_correctness=1.0,
-        beta_tokens=0.001,
-        gamma_steps=0.05,
-        delta_deadloop=0.10,
+        beta_tokens=0.0002,
+        gamma_steps=0.03,
+        delta_deadloop=0.20,
     )
-
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
 
     memory_bank = TrajectoryMemoryBank(max_size=300)
-    await bootstrap_memory_bank(
-        tasks=tasks,
-        task_adapter=adapter,
-        executor=executor,
-        reward_calculator=reward_calculator,
-        memory_bank=memory_bank,
-        default_agent_names=agent_names,
-        default_node_kwargs=node_kwargs,
-        bootstrap_task_limit=100,
-        keep_top_k_per_task=2,
-    )
-    memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
+    # await bootstrap_memory_bank(
+    #     tasks=tasks,
+    #     task_adapter=adapter,
+    #     executor=executor,
+    #     reward_calculator=reward_calculator,
+    #     memory_bank=memory_bank,
+    #     default_agent_names=agent_names,
+    #     default_node_kwargs=node_kwargs,
+    #     bootstrap_task_limit=100,
+    #     keep_top_k_per_task=2,
+    # )
+    # memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
     # memory_bank.load_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
+    memory_bank.load_jsonl("/home/zhangdi24/diffusion_agent/results/v3/memory_bootstrap.jsonl")
 
     task_dim = len(memory_bank.items[0]["task_embedding"]) if len(memory_bank) > 0 else 384
     # graph_generator = GraphGenerator(
@@ -268,46 +274,56 @@ async def main():
     )
 
     history = []
-    best_reward = float("-inf")
-    num_episodes = 100
+    best_reward_mean = float("-inf")
+    num_updates = 50
+    batch_episodes = 1
 
     print("[V3] Step 6-8: train router under graph constraints and execute the selected trace directly.")
-    for episode in range(num_episodes):
-        metrics = await trainer.train_one_episode()
+    for update_idx in range(num_updates):
+        metrics = await trainer.train_batch(batch_episodes=batch_episodes)
+
         record = {
-            "episode": episode,
-            "reward": float(metrics["reward"]),
-            "correct": int(metrics["correct"]),
-            "total_tokens": float(metrics["total_tokens"]),
-            "steps": int(metrics["steps"]),
-            "deadloops": int(metrics["deadloops"]),
-            "trace": metrics["trace"],
-            "trace_local": metrics["trace_local"],
+            "update": update_idx,
+            "batch_episodes": int(metrics["batch_episodes"]),
+            "num_transitions": int(metrics["num_transitions"]),
+
+            "reward_mean": float(metrics["reward_mean"]),
+            "correct_rate": float(metrics["correct_rate"]),
+            "token_mean": float(metrics["token_mean"]),
+            "steps_mean": float(metrics["steps_mean"]),
+            "deadloops_mean": float(metrics["deadloops_mean"]),
+
             "loss": float(metrics["loss"]),
             "policy_loss": float(metrics["policy_loss"]),
             "value_loss": float(metrics["value_loss"]),
             "entropy": float(metrics["entropy"]),
             "approx_kl": float(metrics["approx_kl"]),
             "clip_fraction": float(metrics["clip_fraction"]),
+
             "memory_size": len(memory_bank),
         }
         history.append(record)
 
-        if episode % 5 == 0:
+        if update_idx % 5 == 0:
             print(
-                f"[router] ep={episode} | reward={record['reward']:.4f} | "
-                f"correct={record['correct']} | tokens={record['total_tokens']:.1f} | "
-                f"steps={record['steps']} | deadloops={record['deadloops']} | loss={record['loss']:.4f} | kl={record['approx_kl']:.4f} | trace_local={record['trace_local']}"
+                f"[router] update={update_idx} | "
+                f"reward_mean={record['reward_mean']:.4f} | "
+                f"correct_rate={record['correct_rate']:.4f} | "
+                f"token_mean={record['token_mean']:.1f} | "
+                f"steps_mean={record['steps_mean']:.2f} | "
+                f"deadloops_mean={record['deadloops_mean']:.2f} | "
+                f"loss={record['loss']:.4f} | "
+                f"kl={record['approx_kl']:.4f}"
             )
 
-        if record["reward"] > best_reward:
-            best_reward = record["reward"]
+        if record["reward_mean"] > best_reward_mean:
+            best_reward_mean = record["reward_mean"]
             torch.save(
                 {
-                    "episode": episode,
+                    "update": update_idx,
                     "router_policy_state_dict": router_policy.state_dict(),
                     "optimizer_state_dict": trainer.optimizer.state_dict(),
-                    "best_reward": best_reward,
+                    "best_reward_mean": best_reward_mean,
                     "history": history,
                     "config": {
                         "dataset_json": dataset_json,
@@ -316,6 +332,7 @@ async def main():
                         "decision_method": decision_method,
                         "num_rounds": num_rounds,
                         "agent_names": agent_names,
+                        "batch_episodes": batch_episodes,
                     },
                 },
                 ckpt_dir / "router_best.pt",
@@ -324,8 +341,8 @@ async def main():
         with (save_dir / "train_history.json").open("w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
 
-        if (episode + 1) % 20 == 0:
-            memory_bank.export_jsonl(str(save_dir / f"memory_episode_{episode + 1}.jsonl"))
+        if (update_idx + 1) % 20 == 0:
+            memory_bank.export_jsonl(str(save_dir / f"memory_update_{update_idx + 1}.jsonl"))
 
 
 if __name__ == "__main__":
