@@ -199,6 +199,13 @@ async def main():
     #     gamma_steps=0.05,
     #     delta_deadloop=0.10,
     # )
+    # v5
+    # reward_calculator = V3RewardCalculator(
+    #     alpha_correctness=1.0,
+    #     beta_tokens=0.0002,
+    #     gamma_steps=0.03,
+    #     delta_deadloop=0.20,
+    # )
     reward_calculator = V3RewardCalculator(
         alpha_correctness=1.0,
         beta_tokens=0.0002,
