@@ -159,8 +159,8 @@ async def train_graph_generator_from_memory(
 
 async def main():
     dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
-    # llm_name = 'Meta-Llama-3.1-8B-Instruct'
+    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    llm_name = 'Meta-Llama-3.1-8B-Instruct'
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1

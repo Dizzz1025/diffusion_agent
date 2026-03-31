@@ -132,6 +132,6 @@ class RouterPolicy(nn.Module):
 
         return {
             "next_agent_logits": logits,
-            "stop_logit": self.stop_head(h).squeeze(-1),
+            # "stop_logit": self.stop_head(h).squeeze(-1),
             "state_value": self.value_head(h).squeeze(-1),
         }

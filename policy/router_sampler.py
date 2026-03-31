@@ -37,7 +37,7 @@ class RouterSampler:
         real_node_probs = node_probs[:decision_idx]          # [MOD] 前 N 个是真实 agent
         valid = torch.zeros_like(node_probs)                 # [MOD]
 
-        real_node_mask = (node_probs >= self.node_threshold).float() # node_mask.shape = [4]
+        real_node_mask = (real_node_probs >= self.node_threshold).float() # node_mask.shape = [4]
         if last_agent is None:
             # [MOD] 第一步只能选真实 agent，不能直接选 decision node
             valid[:decision_idx] = real_node_mask
@@ -73,12 +73,12 @@ class RouterSampler:
         if valid_agent_mask.dim() == 1:
             valid_agent_mask = valid_agent_mask.unsqueeze(0)
 
-        stop_dist = Bernoulli(logits=policy_output["stop_logit"].unsqueeze(-1))
+        # stop_dist = Bernoulli(logits=policy_output["stop_logit"].unsqueeze(-1))
         masked_logits = policy_output["next_agent_logits"].clone()
         masked_logits = masked_logits.masked_fill(valid_agent_mask <= 0, -1e9)
         next_agent_dist = Categorical(logits=masked_logits)
         probs = torch.softmax(masked_logits, dim=-1)
-        return stop_dist, next_agent_dist, masked_logits, probs
+        return next_agent_dist, masked_logits, probs
 
     def sample(
         self,
@@ -86,18 +86,13 @@ class RouterSampler:
         valid_agent_mask: torch.Tensor,
         trace,
     ) -> Dict:
-        trace_indices = trace_to_local_indices(trace)
-        stop_dist, next_agent_dist, masked_logits, probs = self._build_distributions(policy_output, valid_agent_mask)
-
-        stop_sample = stop_dist.sample()
-        use_stop_logprob = not (self.force_non_empty_trace and len(trace_indices) == 0)
-        if not use_stop_logprob:
-            stop_sample.zero_()
+        next_agent_dist, masked_logits, probs = self._build_distributions(policy_output, valid_agent_mask)
 
         next_agent = next_agent_dist.sample()
         picked = int(next_agent[0].item())
-        decision_idx = self._decision_idx(masked_logits)  # [MOD]
-        is_decision = picked == decision_idx              # [MOD]
+
+        decision_idx = self._decision_idx(valid_agent_mask)
+        is_decision = (picked == decision_idx)
 
         logprob = next_agent_dist.log_prob(next_agent)
         entropy = next_agent_dist.entropy()
