@@ -54,7 +54,9 @@ class MultiAgentGraphV3Env:
         self.current_task_embedding = None
         self.current_summary = None
         self.current_graph_prior = None
+        self.current_execution_graph_prior = None  # [MOD] 新增：给 executor 用的真实图
         self.current_agent_names = list(executor.agent_names)
+
         self.current_node_kwargs = list(executor.node_kwargs or [{} for _ in executor.agent_names])
         self.current_agent_pool = []
         self.current_agent_profile_embeddings = agent_profile_embeddings
@@ -73,7 +75,63 @@ class MultiAgentGraphV3Env:
             "node_prior": torch.tensor(summary["node_prior"], dtype=torch.float32).unsqueeze(0),
             "edge_prior": torch.tensor(summary["edge_prior"], dtype=torch.float32).unsqueeze(0),
         }
+    
+    def _extend_graph_prior_with_decision(
+        self,
+        graph_prior: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        """
+        [MOD]
+        给 router 用的图先验：
+        - 前 N 个节点是真实 agent
+        - 最后 1 个节点是 decision node
+        - 所有真实 agent -> decision node 的边先设成 1.0
+        这样最小改动就能实现“选到 decision node 就结束”
+        """
+        node_probs = graph_prior["node_probs"]
+        edge_probs = graph_prior["edge_probs"]
 
+        if node_probs.dim() == 1:
+            node_probs = node_probs.unsqueeze(0)
+        if edge_probs.dim() == 2:
+            edge_probs = edge_probs.unsqueeze(0)
+
+        batch_size, num_real_agents = node_probs.shape
+        node_dtype = node_probs.dtype
+        edge_dtype = edge_probs.dtype
+        node_device = node_probs.device
+        edge_device = edge_probs.device
+
+        # [MOD] 给 decision node 一个固定可用的 node prior
+        node_probs_ext = torch.cat(
+            [
+                node_probs,
+                torch.ones(batch_size, 1, dtype=node_dtype, device=node_device),
+            ],
+            dim=-1,
+        )
+
+        # [MOD] 扩边矩阵
+        edge_probs_ext = torch.zeros(
+            batch_size,
+            num_real_agents + 1,
+            num_real_agents + 1,
+            dtype=edge_dtype,
+            device=edge_device,
+        )
+        edge_probs_ext[:, :num_real_agents, :num_real_agents] = edge_probs
+
+        # [MOD] 所有真实 agent 都允许转到 decision node
+        edge_probs_ext[:, :num_real_agents, num_real_agents] = 1.0
+
+        # [MOD] decision 自环可留着，纯粹为了矩阵完整
+        edge_probs_ext[:, num_real_agents, num_real_agents] = 1.0
+
+        return {
+            "node_probs": node_probs_ext,
+            "edge_probs": edge_probs_ext,
+        }
+    
     def reset(self) -> Dict:
         if self.task_sampling_mode == "random":
             self.current_task_idx = random.randrange(len(self.tasks))
@@ -101,20 +159,27 @@ class MultiAgentGraphV3Env:
             top_k=self.top_k_memory,
         )
         summary_tensors = self._summary_to_tensors(self.current_summary)
+
         task_tensor = torch.tensor(self.current_task_embedding, dtype=torch.float32).unsqueeze(0)
 
+        # [MOD] 先拿“真实 agent 图”，给 executor 用
         if self.graph_generator is not None and self.current_agent_profile_embeddings is not None:
             with torch.no_grad():
-                self.current_graph_prior = self.graph_generator.predict_graph(
+                self.current_execution_graph_prior = self.graph_generator.predict_graph(
                     task_tensor,
                     self.current_agent_profile_embeddings,
                     memory_summary=summary_tensors,
                 )
         else:
-            self.current_graph_prior = {
+            self.current_execution_graph_prior = {
                 "node_probs": summary_tensors["node_prior"],
                 "edge_probs": summary_tensors["edge_prior"],
             }
+
+        # [MOD] 再基于真实图扩成“router 图 = 真实 agent + decision node”
+        self.current_graph_prior = self._extend_graph_prior_with_decision(
+            self.current_execution_graph_prior
+        )
 
         return {
             "task": self.current_task,
@@ -135,7 +200,7 @@ class MultiAgentGraphV3Env:
         result = await self.executor.run_trace(
             task=self.current_task,
             trace=trace,
-            graph_prior=self.current_graph_prior,
+            graph_prior=self.current_execution_graph_prior,
             node_threshold=self.node_threshold,
             edge_threshold=self.edge_threshold,
             agent_names_override=self.current_agent_names,

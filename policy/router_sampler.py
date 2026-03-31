@@ -33,25 +33,39 @@ class RouterSampler:
         if edge_probs.dim() == 3:
             edge_probs = edge_probs[0]
 
-        node_mask = (node_probs >= self.node_threshold).float() # node_mask.shape = [4]
+        decision_idx = self._decision_idx(node_probs)        # [MOD]
+        real_node_probs = node_probs[:decision_idx]          # [MOD] 前 N 个是真实 agent
+        valid = torch.zeros_like(node_probs)                 # [MOD]
+
+        real_node_mask = (node_probs >= self.node_threshold).float() # node_mask.shape = [4]
         if last_agent is None:
-            valid = node_mask.clone()
+            # [MOD] 第一步只能选真实 agent，不能直接选 decision node
+            valid[:decision_idx] = real_node_mask
+            valid[decision_idx] = 0.0
         else:
-            valid = ((edge_probs[int(last_agent)] >= self.edge_threshold).float() * node_mask)
+            valid[:decision_idx] = (
+                (edge_probs[int(last_agent), :decision_idx] >= self.edge_threshold).float()
+                * real_node_mask
+            )
+
+            # [MOD] decision node 是否可选，也由图边来控制
+            valid[decision_idx] = float(
+                edge_probs[int(last_agent), decision_idx].item() >= self.edge_threshold
+            )
         
-        # 如果边和节点的约束下一个候选结果都没了，就退回到“基于节点的宽松可选”
-        if valid.sum() <= 0:
-            valid = node_probs.clone()
-            if last_agent is not None:
+        # 原逻辑保留：如果严格图约束下没有真实 agent 可选，则回退到更宽松的 real-agent 候选
+        if valid[:decision_idx].sum() <= 0:
+            valid[:decision_idx] = real_node_probs.clone()
+            if last_agent is not None and 0 <= int(last_agent) < decision_idx:
                 valid[int(last_agent)] = 0.0
 
-        if valid.sum() <= 0:
-            valid = torch.ones_like(node_probs)
-            if last_agent is not None:
+        if valid[:decision_idx].sum() <= 0:
+            valid[:decision_idx] = torch.ones_like(real_node_probs)
+            if last_agent is not None and 0 <= int(last_agent) < decision_idx:
                 valid[int(last_agent)] = 0.0
 
-        if self.force_non_empty_trace and len(trace_indices) == 0 and valid.sum() <= 0:
-            valid = torch.ones_like(node_probs)
+        if self.force_non_empty_trace and len(trace_indices) == 0:
+            valid[decision_idx] = 0.0
 
         return (valid > 0).float()
 
@@ -81,30 +95,34 @@ class RouterSampler:
             stop_sample.zero_()
 
         next_agent = next_agent_dist.sample()
-        use_agent_logprob = (int(stop_sample[0][0].item()) == 0) or (len(trace_indices) == 0)
-
-        logprob = torch.zeros(1, device=masked_logits.device, dtype=masked_logits.dtype)
-        entropy = torch.zeros(1, device=masked_logits.device, dtype=masked_logits.dtype)
-        if use_agent_logprob:
-            logprob = logprob + next_agent_dist.log_prob(next_agent)
-            entropy = entropy + next_agent_dist.entropy()
-        if use_stop_logprob:
-            logprob = logprob + stop_dist.log_prob(stop_sample).squeeze(-1)
-            entropy = entropy + stop_dist.entropy().squeeze(-1)
-
         picked = int(next_agent[0].item())
+        decision_idx = self._decision_idx(masked_logits)  # [MOD]
+        is_decision = picked == decision_idx              # [MOD]
+
+        logprob = next_agent_dist.log_prob(next_agent)
+        entropy = next_agent_dist.entropy()
+
+        allowed = (
+            bool(valid_agent_mask[0, picked].item() > 0)
+            if valid_agent_mask.dim() == 2
+            else bool(valid_agent_mask[picked].item() > 0)
+        )
+
 
         action = {
-            "stop": int(stop_sample[0][0].item()),
+            "stop": int(is_decision),
             "next_agent": picked,
             "selected_local_idx": picked,
             "selection_score": float(masked_logits[0, picked].item()),
             "selection_prob": float(probs[0, picked].item()),
-            "allowed_by_graph": bool(valid_agent_mask[picked].item() > 0),
+            "allowed_by_graph": allowed,
             "logprob": logprob,
             "entropy": entropy,
-            "use_stop_logprob": use_stop_logprob,
-            "use_agent_logprob": use_agent_logprob,
+            # [MOD] 兼容字段，已经不再真的使用 stop 的 logprob
+            "use_stop_logprob": False,
+            "use_agent_logprob": True,
+            # [MOD] 新字段：明确告诉 rollout 这一步是不是 decision node
+            "selected_is_decision": bool(is_decision),
         }
         return action
 
@@ -113,26 +131,26 @@ class RouterSampler:
         policy_output: Dict[str, torch.Tensor],
         valid_agent_mask: torch.Tensor,
         selected_local_idx: int,
-        stop: int,
-        use_stop_logprob: bool,
-        use_agent_logprob: bool,
+        stop: int,                 # [MOD] 兼容旧 trainer 签名，实际不再使用
+        use_stop_logprob: bool,    # [MOD] 兼容旧 trainer 签名，实际不再使用
+        use_agent_logprob: bool,   # [MOD] 兼容旧 trainer 签名，实际不再使用
     ) -> Dict[str, torch.Tensor]:
-        stop_dist, next_agent_dist, masked_logits, probs = self._build_distributions(policy_output, valid_agent_mask)
-
+        # stop_dist, next_agent_dist, masked_logits, probs = self._build_distributions(policy_output, valid_agent_mask)
+        next_agent_dist, masked_logits, probs = self._build_distributions(
+            policy_output,
+            valid_agent_mask,
+        )
         selected = torch.tensor([int(selected_local_idx)], dtype=torch.long, device=masked_logits.device)
-        stop_tensor = torch.tensor([[float(stop)]], dtype=torch.float32, device=masked_logits.device)
+        # stop_tensor = torch.tensor([[float(stop)]], dtype=torch.float32, device=masked_logits.device)
 
-        logprob = torch.zeros(1, device=masked_logits.device, dtype=masked_logits.dtype)
-        entropy = torch.zeros(1, device=masked_logits.device, dtype=masked_logits.dtype)
-        if use_agent_logprob:
-            logprob = logprob + next_agent_dist.log_prob(selected)
-            entropy = entropy + next_agent_dist.entropy()
-        if use_stop_logprob:
-            logprob = logprob + stop_dist.log_prob(stop_tensor).squeeze(-1)
-            entropy = entropy + stop_dist.entropy().squeeze(-1)
+        logprob = next_agent_dist.log_prob(selected)
+        entropy = next_agent_dist.entropy()
 
         return {
             "logprob": logprob,
             "entropy": entropy,
             "selection_prob": probs[0, int(selected_local_idx)],
         }
+    
+    def _decision_idx(self, x: torch.Tensor) -> int:
+        return int(x.size(-1) - 1)  # [MOD] 最后一个节点固定视为 decision node

@@ -151,8 +151,8 @@ async def rollout_trace_greedy(
 async def evaluate():
     # ===== 这里按你的实际路径改 =====
     dataset_json = "my_datasets/gsm8k/gsm8k_test.jsonl"
-    # llm_name = "Meta-Llama-3.1-8B-Instruct"
-    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    llm_name = "Meta-Llama-3.1-8B-Instruct"
+    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1
@@ -165,9 +165,9 @@ async def evaluate():
         {"role": "ProgrammingExpert"},
     ]
 
-    save_dir = Path("results/v3")
+    save_dir = Path("results/v5")
     ckpt_path = save_dir / "checkpoints" / "router_best.pt"
-    memory_path = save_dir / "memory_bootstrap.jsonl"
+    memory_path = Path("results/v3") / "memory_bootstrap.jsonl"
     output_path = save_dir / "eval_router_greedy.json"
 
     adapter = GSM8KAdapter()
@@ -187,9 +187,9 @@ async def evaluate():
 
     reward_calculator = V3RewardCalculator(
         alpha_correctness=1.0,
-        beta_tokens=0.001,
-        gamma_steps=0.05,
-        delta_deadloop=0.10,
+        beta_tokens=0.0002,
+        gamma_steps=0.03,
+        delta_deadloop=0.20,
     )
 
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
@@ -236,7 +236,7 @@ async def evaluate():
     print(f"[eval] loaded memory from {memory_path}")
     print(f"[eval] loaded router ckpt from {ckpt_path}")
 
-    tasks = tasks[:12]
+    tasks = tasks[:50]
     for i, task in enumerate(tasks):
         # 因为 env.reset() 内部会 random.choice(self.tasks)
         # 所以这里每次只塞当前 task，保证评估顺序正确

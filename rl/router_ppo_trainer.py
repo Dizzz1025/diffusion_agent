@@ -73,7 +73,7 @@ class RouterPPOTrainer:
 
         trace: List[Dict] = []
         transitions: List[PPORouterTransition] = []
-        visit_counts = [0 for _ in range(len(state["agent_pool"]))]
+        visit_counts = [0 for _ in range(int(graph_prior["node_probs"].size(-1)))]
         last_agent = None
 
         for step_idx in range(self.max_steps):
@@ -111,10 +111,38 @@ class RouterPPOTrainer:
                 )
             )
 
-            if action["stop"] == 1 and len(trace) > 0:
+            # if action["stop"] == 1 and len(trace) > 0:
+            #     break
+
+            # next_agent = int(action["selected_local_idx"])
+            # trace.append(
+            #     build_trace_step(
+            #         local_idx=next_agent,
+            #         agent_pool=state["agent_pool"],
+            #         step_idx=step_idx,
+            #         selection_score=action.get("selection_score"),
+            #         selection_prob=action.get("selection_prob"),
+            #         allowed_by_graph=action.get("allowed_by_graph"),
+            #     )
+            # )
+            # visit_counts[next_agent] += 1
+            # last_agent = next_agent
+            # [MOD] 现在 stop 不再是独立 Bernoulli，而是“选中了 decision node”
+            if action.get("selected_is_decision", False):
+                if len(trace) == 0:
+                    # 正常情况下第一步不该选到 decision；如果发生了，说明 mask 有 bug
+                    raise RuntimeError("Decision node should not be selectable before any real agent is chosen.")
                 break
 
             next_agent = int(action["selected_local_idx"])
+
+            # [MOD] 保险起见，防止 decision node 被误加进真实 trace
+            if next_agent >= len(state["agent_pool"]):
+                raise RuntimeError(
+                    f"Selected idx {next_agent} is not a real agent index. "
+                    f"agent_pool size = {len(state['agent_pool'])}"
+                )
+
             trace.append(
                 build_trace_step(
                     local_idx=next_agent,
@@ -125,6 +153,7 @@ class RouterPPOTrainer:
                     allowed_by_graph=action.get("allowed_by_graph"),
                 )
             )
+
             visit_counts[next_agent] += 1
             last_agent = next_agent
 

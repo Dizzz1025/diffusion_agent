@@ -15,70 +15,57 @@ def gsm_data_process(dataset):
 
 
 def gsm_get_predict(pred_str):
-    if('The answer is ' in pred_str):
+    def extract_boxed_content(s):
+        ans = s.split('boxed')[-1].strip()
+        if not ans:
+            return ''
+        if ans[0] == '{':
+            stack = 1
+            a = ''
+            for c in ans[1:]:
+                if c == '{':
+                    stack += 1
+                    a += c
+                elif c == '}':
+                    stack -= 1
+                    if stack == 0:
+                        break
+                    a += c
+                else:
+                    a += c
+            return a
+        return ans
+
+    pred = ''
+
+    if 'The answer is ' in pred_str:
         pred = pred_str.split('The answer is ')[-1].strip()
-    elif('the answer is ' in pred_str):
+    elif 'the answer is ' in pred_str:
         pred = pred_str.split('the answer is ')[-1].strip()
     elif 'boxed' in pred_str:
-        ans = pred_str.split('boxed')[-1]
-        if (ans[0] == '{'):
-            stack = 1
-            a = ''
-            for c in ans[1:]:
-                if (c == '{'):
-                    stack += 1
-                    a += c
-                elif (c == '}'):
-                    stack -= 1
-                    if (stack == 0): break
-                    a += c
-                else:
-                    a += c
-        else:
-            a = ans.split('$')[0].strip()
-        a = _strip_string(a)
-        pred=a
+        pred = extract_boxed_content(pred_str)
     else:
-        pattern = '-?\d*\.?\d+'
-        pred = re.findall(pattern, pred_str)
-        if(len(pred) >= 1):
-            # print(pred_str)
-            pred = pred[-1]
-        else: pred = ''
-    
-    if pred != "":
-        if pred[-1] == ".":
-            pred = pred[:-1]
-        if pred[-1] == "/":
-            pred = pred[:-1]
-            
-    pred=_strip_string(pred)
-    
+        # 先整体匹配带 $ / 逗号 / 小数 / 负号 的数字
+        matches = re.findall(r'-?\$?\d[\d,]*\.?\d*', pred_str)
+        pred = matches[-1] if matches else ''
+
+    pred = _strip_string(pred)
+    pred = pred.replace(',', '').replace('$', '').strip()
+
+    if pred.endswith('.'):
+        pred = pred[:-1]
+    if pred.endswith('/'):
+        pred = pred[:-1]
+
+    # 再兜底处理一次 boxed
     if 'boxed' in pred:
-        ans = pred.split('boxed')[-1]
-        if (ans[0] == '{'):
-            stack = 1
-            a = ''
-            for c in ans[1:]:
-                if (c == '{'):
-                    stack += 1
-                    a += c
-                elif (c == '}'):
-                    stack -= 1
-                    if (stack == 0): break
-                    a += c
-                else:
-                    a += c
-        else:
-            a = ans.split('$')[0].strip()
-        a = _strip_string(a)
-        pred=a
-        
-    if pred.isdigit():
-        return pred
-    else:
-        matches = re.findall(r'\d+', pred)
-        return matches[-1] if matches else '0'
+        pred = extract_boxed_content(pred)
+        pred = _strip_string(pred)
+        pred = pred.replace(',', '').replace('$', '').strip()
+
+    # 最终提取一个合法数字：支持负数和小数
+    matches = re.findall(r'-?\d+\.?\d*', pred)
+    return matches[-1] if matches else '0'
 
 
 def _fix_sqrt(string):

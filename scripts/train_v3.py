@@ -207,10 +207,14 @@ async def main():
     #     delta_deadloop=0.20,
     # )
     reward_calculator = V3RewardCalculator(
-        alpha_correctness=1.0,
-        beta_tokens=0.0002,
-        gamma_steps=0.03,
+        alpha_correctness=2.0,
+        beta_tokens=0.00005,
+        gamma_steps=0.02,
         delta_deadloop=0.20,
+        min_steps_free=2,
+        short_trace_penalty=0.15,
+        short_trace_threshold=1,
+        use_binary_correctness=True,
     )
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
 

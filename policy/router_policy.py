@@ -29,7 +29,9 @@ class RouterPolicy(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
-        self.stop_head = nn.Linear(hidden_dim, 1)
+        # self.stop_head = nn.Linear(hidden_dim, 1)
+        # [MOD] 原来的 stop_head 删除，改成一个可学习的 decision embedding
+        self.decision_embedding = nn.Parameter(torch.randn(1, 1, agent_dim) * 0.02)
         self.value_head = nn.Linear(hidden_dim, 1)
 
     def encode_state(
@@ -103,14 +105,29 @@ class RouterPolicy(nn.Module):
         global_input = torch.cat([task_embedding, global_stats], dim=-1)
         h = self.global_encoder(global_input)
 
+        batch_size = candidate_embeddings.size(0)
+        num_real_agents = candidate_embeddings.size(1)
+        num_total_nodes = node_probs.size(-1)
+
+        # [MOD] graph_prior 里应该比真实 agent 多 1 个 decision node
+        if num_total_nodes != num_real_agents + 1:
+            raise ValueError(
+                f"graph_prior has {num_total_nodes} nodes, but candidate_embeddings has "
+                f"{num_real_agents} real agents. Expected num_total_nodes = num_real_agents + 1."
+            )
+
+        # [MOD] 给 policy 的候选集拼上 decision node
+        decision_embedding = self.decision_embedding.expand(batch_size, 1, -1)
+        candidate_embeddings_ext = torch.cat([candidate_embeddings, decision_embedding], dim=1)
+
         out_mean = edge_probs.mean(dim=-1)
         in_mean = edge_probs.mean(dim=-2)
         candidate_stats = torch.stack(
             [node_probs, out_mean, in_mean, visit_norm, visited_mask, last_one_hot],
             dim=-1,
         )
-        h_expand = h.unsqueeze(1).expand(-1, candidate_embeddings.size(1), -1)
-        candidate_input = torch.cat([h_expand, candidate_embeddings, candidate_stats], dim=-1)
+        h_expand = h.unsqueeze(1).expand(-1, candidate_embeddings_ext.size(1), -1)
+        candidate_input = torch.cat([h_expand, candidate_embeddings_ext, candidate_stats], dim=-1)
         logits = self.candidate_head(candidate_input).squeeze(-1)
 
         return {
