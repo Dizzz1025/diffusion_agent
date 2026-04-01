@@ -203,6 +203,7 @@ class MultiAgentGraphV3Env:
             graph_prior=self.current_execution_graph_prior,
             node_threshold=self.node_threshold,
             edge_threshold=self.edge_threshold,
+            memory_summary=self.current_summary,
             agent_names_override=self.current_agent_names,
             node_kwargs_override=self.current_node_kwargs,
         )

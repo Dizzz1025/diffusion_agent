@@ -190,6 +190,7 @@ class MultiAgentExecutor:
         allow_all_previous_if_disconnected: bool = True,
         agent_names_override: Optional[List[str]] = None,
         node_kwargs_override: Optional[List[Dict[str, Any]]] = None,
+        memory_summary: Optional[Dict[str, Any]] = None,   # 新增
     ) -> Dict[str, Any]:
         """Execute a router-produced trace directly.
 
@@ -235,11 +236,26 @@ class MultiAgentExecutor:
             node_id = node_ids[agent_idx]
             current_node = graph.nodes[node_id]
 
-            prefix_predecessors = [snap for snap in executed_step_snapshots if getattr(snap, "outputs", None)]
-            current_node.spatial_predecessors = prefix_predecessors
-            current_node.temporal_predecessors = []
+            visible_predecessors = self._visible_predecessors_for_step(
+                executed_step_snapshots=executed_step_snapshots,
+                current_agent_idx=agent_idx,
+                edge_mask=edge_mask,
+            )
 
-            await current_node.async_execute(input_dict)
+            current_node.spatial_predecessors = visible_predecessors
+            current_node.temporal_predecessors = []
+            
+            route_context = {
+                "step_idx": step_idx,
+                "trace": list(safe_trace),
+                "current_agent_idx": agent_idx,
+                "current_node_id": node_id,
+                "visible_predecessor_ids": [pred.id for pred in visible_predecessors],
+            }
+
+            await current_node.async_execute(input_dict,
+                                            memory_summary=memory_summary,
+                                            route_context=route_context)
             current_node.update_memory()
 
             snapshot = SimpleNamespace(
@@ -248,6 +264,7 @@ class MultiAgentExecutor:
                 local_idx=agent_idx,
                 role=getattr(current_node, "role", None),
                 outputs=deepcopy(current_node.outputs),
+                output_packet=deepcopy(getattr(current_node, "output_packet", {})),  # 新增
             )
             executed_step_snapshots.append(snapshot)
             execution_records.append(
@@ -255,7 +272,7 @@ class MultiAgentExecutor:
                     "step": step_idx,
                     "agent_idx": agent_idx,
                     "node_id": node_id,
-                    "prefix_predecessors": [pred.id for pred in prefix_predecessors],
+                    "visible_predecessors": [pred.id for pred in visible_predecessors],
                     "revisit": sum(1 for x in safe_trace[: step_idx + 1] if x == agent_idx) > 1,
                 }
             )
@@ -282,3 +299,30 @@ class MultiAgentExecutor:
             },
         )
         return result
+
+    def _visible_predecessors_for_step(
+        self,
+        executed_step_snapshots,
+        current_agent_idx: int,
+        edge_mask: Optional[List[List[int]]],
+    ):
+        visible = []
+        for snap in executed_step_snapshots:
+            if not getattr(snap, "outputs", None):
+                continue
+
+            if edge_mask is None:
+                visible.append(snap)
+                continue
+
+            src = int(snap.local_idx)
+            dst = int(current_agent_idx)
+
+            connected = (
+                0 <= src < len(edge_mask)
+                and 0 <= dst < len(edge_mask[src])
+                and int(edge_mask[src][dst]) > 0
+            )
+            if connected:
+                visible.append(snap)
+        return visible

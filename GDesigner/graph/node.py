@@ -61,7 +61,15 @@ class Node(ABC):
         self.outputs: List[Any] = []
         self.raw_inputs: List[Any] = []
         self.role = ""
-        self.last_memory: Dict[str,List[Any]] = {'inputs':[],'outputs':[],'raw_inputs':[]}        
+        self.last_memory: Dict[str,List[Any]] = {'inputs':[],'outputs':[],'raw_inputs':[]}
+        self.output_packet: Dict[str, Any] = {}
+        self.last_memory: Dict[str, Any] = {
+            'inputs': [],
+            'outputs': [],
+            'raw_inputs': [],
+            'output_packet': {},
+        }
+
 
     @property
     def node_name(self):
@@ -109,6 +117,7 @@ class Node(ABC):
         self.last_memory['inputs'] = self.inputs
         self.last_memory['outputs'] = self.outputs
         self.last_memory['raw_inputs'] = self.raw_inputs
+        self.last_memory['output_packet'] = self.output_packet
 
     def get_spatial_info(self)->Dict[str,Dict]:
         """ Return a dict that maps id to info. """
@@ -122,7 +131,10 @@ class Node(ABC):
                     continue
                 else:
                     predecessor_output = predecessor_outputs
-                spatial_info[predecessor.id] = {"role":predecessor.role,"output":predecessor_output}
+                spatial_info[predecessor.id] = {"role":predecessor.role,
+                                                "output":predecessor_output,
+                                                "packet": getattr(predecessor, "output_packet", {}),
+                                                }
 
         return spatial_info
 
@@ -137,12 +149,16 @@ class Node(ABC):
                     continue
                 else:
                     predecessor_output = predecessor_outputs
-                temporal_info[predecessor.id] = {"role":predecessor.role,"output":predecessor_output}
+                temporal_info[predecessor.id] = {"role":predecessor.role,
+                                                 "output":predecessor_output,
+                                                 "packet": predecessor.last_memory.get("output_packet", {}),
+                                                 }
         
         return temporal_info
     
     def execute(self, input:Any, **kwargs):
         self.outputs = []
+        self.output_packet = []
         spatial_info:Dict[str,Dict] = self.get_spatial_info()
         temporal_info:Dict[str,Dict] = self.get_temporal_info()
         results = [self._execute(input, spatial_info, temporal_info, **kwargs)]
@@ -157,6 +173,7 @@ class Node(ABC):
     async def async_execute(self, input:Any, **kwargs):
 
         self.outputs = []
+        self.output_packet = []
         spatial_info:Dict[str,Any] = self.get_spatial_info()
         temporal_info:Dict[str,Any] = self.get_temporal_info()
         tasks = [asyncio.create_task(self._async_execute(input, spatial_info, temporal_info, **kwargs))]

@@ -6,7 +6,13 @@ from ..llm.llm_registry import LLMRegistry
 from ..prompt.prompt_set_registry import PromptSetRegistry
 from ..tools.coding.python_executor import execute_code_get_return
 from my_datasets.gsm8k_dataset import gsm_get_predict
-
+from utils.context_packets import (
+    build_output_packet,
+    build_memory_packets,
+    select_context_packets,
+    format_packet_context,
+    format_memory_context,
+)
 @AgentRegistry.register('MathSolver')
 class MathSolver(Node):
     def __init__(self, id: str | None =None, role:str = None ,domain: str = "", llm_name: str = "",):
@@ -23,41 +29,87 @@ class MathSolver(Node):
         spatial_str = ""
         temporal_str = ""
         user_prompt = self.prompt_set.get_answer_prompt(question=raw_inputs["task"],role=self.role)
-        if self.role == "MathSolver":
-            user_prompt += "(Hint: The answer is near to"
-            for id, info in spatial_info.items():
-                user_prompt += " "+gsm_get_predict(info["output"])
-            for id, info in temporal_info.items():
-                user_prompt += " "+gsm_get_predict(info["output"])
-            user_prompt += ")."
+        route_context = kwargs.get("route_context", {}) or {}
+        memory_summary = kwargs.get("memory_summary", {}) or {}
+
+        selected_packets = select_context_packets(
+            role=self.role,
+            spatial_info=spatial_info,
+            temporal_info=temporal_info,
+        )
+        packet_context = format_packet_context(selected_packets)
+
+        memory_packets = build_memory_packets(memory_summary, top_k=2)
+        memory_context = format_memory_context(memory_packets)
+
+        route_str = (
+            f"[Route context]\n"
+            f"- step_idx: {route_context.get('step_idx', -1)}\n"
+            f"- visible_predecessors: {route_context.get('visible_predecessor_ids', [])}\n"
+        )
+
+        if packet_context:
+            user_prompt += "\n\n" + route_str + "\n" + packet_context
         else:
-            for id, info in spatial_info.items():
-                spatial_str += f"Agent {id} as a {info['role']} his answer to this question is:\n\n{info['output']}\n\n"
-            for id, info in temporal_info.items():
-                temporal_str += f"Agent {id} as a {info['role']} his answer to this question was:\n\n{info['output']}\n\n"
-            user_prompt += f"At the same time, there are the following responses to the same question for your reference:\n\n{spatial_str} \n\n" if len(spatial_str) else ""
-            user_prompt += f"In the last round of dialogue, there were the following responses to the same question for your reference: \n\n{temporal_str}" if len(temporal_str) else ""
+            user_prompt += "\n\n" + route_str + "\n[Visible collaboration packets]\n- None"
+
+        if memory_context:
+            user_prompt += "\n\n" + memory_context
+
+        # 给不同角色再加一层明确要求
+        if self.role == "ProblemDecomposer":
+            user_prompt += (
+                "\n\n[Your required output]\n"
+                "Return a decomposition only: variables, plan_steps, equations.\n"
+                "Do not solve the problem completely."
+            )
+        elif self.role == "MathSolver":
+            user_prompt += (
+                "\n\n[Your required output]\n"
+                "Use the available plan/program/check packets if useful. "
+                "Provide derivation and the final numerical answer in format '####Answer: <number>'."
+            )
+        elif self.role == "ProgrammingExpert":
+            user_prompt += (
+                "\n\n[Your required output]\n"
+                "Write Python code only if useful, then report the program result."
+            )
+        elif self.role == "CalculationChecker":
+            user_prompt += (
+                "\n\n[Your required output]\n"
+                "Verify the candidate answer and key computations. "
+                "State whether the answer is correct, incorrect, or uncertain."
+            )
+
         return system_prompt, user_prompt
     
     def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
         """ To be overriden by the descendant class """
         """ Use the processed input to get the result """
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
         response = self.llm.gen(message)
+        if self.role == "ProgrammingExpert":
+            answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
+            response += f"\nthe answer is {answer}"
+
+        self.output_packet = build_output_packet(self.role, response)
         return response
 
     async def _async_execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
         """ To be overriden by the descendant class """
         """ Use the processed input to get the result """
         """ The input type of this node is Dict """
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info)
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
         response = await self.llm.agen(message)
         if self.role == "ProgrammingExpert":
             answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
             response += f"\nthe answer is {answer}"
+
+        self.output_packet = build_output_packet(self.role, response)
         print(f"#################system_prompt:{system_prompt}")
         print(f"#################user_prompt:{user_prompt}")
         print(f"#################response:{response}")
+        print(f"#################packet:{self.output_packet}")
         return response
