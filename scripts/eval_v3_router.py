@@ -42,12 +42,10 @@ def greedy_action(
     trace,
 ) -> Dict:
     """
-    测试阶段用确定性选择：
-    1) next_agent = masked logits 的 argmax
-    2) stop = sigmoid(stop_logit) >= 0.5
+    测试阶段的确定性选择：
+    直接在 masked logits 上做 argmax。
+    最后一个 candidate 固定视为 decision node。
     """
-    trace_indices = trace_to_local_indices(trace)
-
     if valid_agent_mask.dim() == 1:
         valid_agent_mask = valid_agent_mask.unsqueeze(0)
 
@@ -55,26 +53,20 @@ def greedy_action(
     masked_logits = masked_logits.masked_fill(valid_agent_mask <= 0, -1e9)
     probs = torch.softmax(masked_logits, dim=-1)
 
-    stop_prob = torch.sigmoid(policy_output["stop_logit"].reshape(-1))[0]
-    stop = int((stop_prob >= 0.8).item())
-
-    # 第一跳不能直接 stop
-    use_stop_logprob = not (router_sampler.force_non_empty_trace and len(trace_indices) == 0)
-    if not use_stop_logprob:
-        stop = 0
-
     picked = int(masked_logits[0].argmax().item())
-    use_agent_logprob = (stop == 0) or (len(trace_indices) == 0)
+    decision_idx = int(valid_agent_mask.size(-1) - 1)
+    is_decision = (picked == decision_idx)
 
     return {
-        "stop": stop,
+        "stop": int(is_decision),  # 兼容旧字段
         "next_agent": picked,
         "selected_local_idx": picked,
         "selection_score": float(masked_logits[0, picked].item()),
         "selection_prob": float(probs[0, picked].item()),
         "allowed_by_graph": bool(valid_agent_mask[0, picked].item() > 0),
-        "use_stop_logprob": use_stop_logprob,
-        "use_agent_logprob": use_agent_logprob,
+        "use_stop_logprob": False,   # 兼容旧 trainer / record 字段
+        "use_agent_logprob": True,   # 兼容旧 trainer / record 字段
+        "selected_is_decision": bool(is_decision),
     }
 
 
@@ -86,20 +78,23 @@ async def rollout_trace_greedy(
     max_steps: int = 5,
 ) -> Dict:
     """
-    基本复用 RouterPPOTrainer.rollout_trace 的逻辑，
-    但只做推理，不做 PPO 更新。
+    与训练版 RouterPPOTrainer.rollout_trace 对齐的 greedy 推理逻辑。
     """
     task_embedding = torch.tensor(state["task_embedding"], dtype=torch.float32)
     graph_prior = {
         "node_probs": state["graph_prior"]["node_probs"].detach().clone(),
         "edge_probs": state["graph_prior"]["edge_probs"].detach().clone(),
     }
+
     candidate_embeddings = state["candidate_agent_embeddings"]
     if candidate_embeddings is None:
         raise ValueError("candidate_agent_embeddings must be provided for router evaluation.")
 
     trace: List[Dict] = []
-    visit_counts = [0 for _ in range(len(state["agent_pool"]))]
+
+    # 注意：这里要和训练一致，用 graph_prior 的节点数
+    # 因为 graph_prior 里包含了最后那个 decision node
+    visit_counts = [0 for _ in range(int(graph_prior["node_probs"].size(-1)))]
     last_agent = None
 
     with torch.no_grad():
@@ -114,15 +109,32 @@ async def rollout_trace_greedy(
                 step_idx=step_idx,
                 max_steps=max_steps,
             )
-            policy_output = router_policy(state_repr, candidate_embeddings=candidate_embeddings)
+
+            policy_output = router_policy(
+                state_repr,
+                candidate_embeddings=candidate_embeddings,
+            )
 
             valid_mask = router_sampler.build_valid_agent_mask(graph_prior, last_agent, trace)
             action = greedy_action(router_sampler, policy_output, valid_mask, trace)
 
-            if action["stop"] == 1 and len(trace) > 0:
+            # 与训练版保持一致：选中 decision node 就停止
+            if action.get("selected_is_decision", False):
+                if len(trace) == 0:
+                    raise RuntimeError(
+                        "Decision node should not be selectable before any real agent is chosen."
+                    )
                 break
 
             next_agent = int(action["selected_local_idx"])
+
+            # 防御性检查：decision node 不能被写进真实 trace
+            if next_agent >= len(state["agent_pool"]):
+                raise RuntimeError(
+                    f"Selected idx {next_agent} is not a real agent index. "
+                    f"agent_pool size = {len(state['agent_pool'])}"
+                )
+
             trace.append(
                 build_trace_step(
                     local_idx=next_agent,
@@ -133,13 +145,16 @@ async def rollout_trace_greedy(
                     allowed_by_graph=action.get("allowed_by_graph"),
                 )
             )
+
             visit_counts[next_agent] += 1
             last_agent = next_agent
 
+    # 与训练一致：兜底给一个非空 trace
     if len(trace) == 0:
         trace = [build_trace_step(0, state["agent_pool"], step_idx=0)]
 
     reward, info = await env.execute_trace(trace)
+
     return {
         "trace": trace,
         "trace_local": trace_to_local_indices(trace),
@@ -165,7 +180,7 @@ async def evaluate():
         {"role": "ProgrammingExpert"},
     ]
 
-    save_dir = Path("results/v5")
+    save_dir = Path("results/v6")
     ckpt_path = save_dir / "checkpoints" / "router_best.pt"
     memory_path = Path("results/v3") / "memory_bootstrap.jsonl"
     output_path = save_dir / "eval_router_greedy.json"
@@ -236,7 +251,7 @@ async def evaluate():
     print(f"[eval] loaded memory from {memory_path}")
     print(f"[eval] loaded router ckpt from {ckpt_path}")
 
-    tasks = tasks[:50]
+    tasks = tasks[:12]
     for i, task in enumerate(tasks):
         # 因为 env.reset() 内部会 random.choice(self.tasks)
         # 所以这里每次只塞当前 task，保证评估顺序正确
@@ -248,7 +263,7 @@ async def evaluate():
             router_policy=router_policy,
             router_sampler=router_sampler,
             state=state,
-            max_steps=3,
+            max_steps=5,
         )
 
         result = episode["info"]["result"]
