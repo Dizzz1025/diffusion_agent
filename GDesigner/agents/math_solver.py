@@ -17,7 +17,7 @@ import re
 
 @AgentRegistry.register('MathSolver')
 class MathSolver(Node):
-    def __init__(self, id: str | None =None, role:str = None ,domain: str = "", llm_name: str = "",):
+    def __init__(self, id: str | None =None, role:str = None ,domain: str = "", llm_name: str = "", **kwargs):
         super().__init__(id, "MathSolver" ,domain, llm_name)
         self.llm = LLMRegistry.get(llm_name, model_name=llm_name)
         self.prompt_set = PromptSetRegistry.get(domain)
@@ -84,6 +84,8 @@ class MathSolver(Node):
                 "Translate the math problem into executable Python when helpful.\n"
                 "Focus on formulas, expressions, and program result.\n"
                 "Write runnable Python code only when code is actually useful.\n"
+                "The code must assign the final result to a variable named answer.\n"
+                "The last meaningful line of code should be in the form: answer = <final_result>.\n"
                 "Do not mix explanation inside the code block."
             ),
             "CalculationChecker": (
@@ -109,15 +111,15 @@ class MathSolver(Node):
 
                 [VARIABLES]
                 List the key variables / quantities.
-                Use bullet points.
+                Use bullet points starting with "-".
 
                 [CONSTRAINTS]
                 List the constraints / conditions.
-                Use bullet points.
+                Use bullet points starting with "-".
 
                 [PLAN]
                 List the intended solving steps only.
-                Use bullet points.
+                Use bullet points starting with "-".
                 Do NOT solve them out.
 
                 [EQUATIONS]
@@ -136,11 +138,11 @@ class MathSolver(Node):
 
                 [USED_PACKETS]
                 List which upstream packets were useful.
-                Use bullet points.
+                Use bullet points starting with "-".
 
                 [KEY_STEPS]
                 List the essential solving steps.
-                Use bullet points.
+                Use bullet points starting with "-".
 
                 [CANDIDATE_ANSWER]
                 Write the candidate numerical answer.
@@ -162,9 +164,10 @@ class MathSolver(Node):
 
                 [PYTHON_CODE]
                 Provide only Python code in a fenced code block.
+                The code must assign the final result to a variable named answer.
 
                 [CODE_RESULT]
-                Report the actual computed result from the code.
+                Report the value of answer.
 
                 [CANDIDATE_ANSWER]
                 Write the candidate numerical answer.
@@ -185,14 +188,14 @@ class MathSolver(Node):
 
                 [CHECK_STEPS]
                 List the key verification steps.
-                Use bullet points.
+                Use bullet points starting with "-".
 
                 [VERDICT]
                 Output one of: correct / incorrect / uncertain
 
                 [ERRORS]
                 List specific errors if found.
-                Use bullet points.
+                Use bullet points starting with "-".
                 If none, write "None".
 
                 [CORRECT_ANSWER]
@@ -213,18 +216,18 @@ class MathSolver(Node):
                                 ...
                                 """.strip())
 
-    # def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
-    #     """ To be overriden by the descendant class """
-    #     """ Use the processed input to get the result """
-    #     system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-    #     message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
-    #     response = self.llm.gen(message)
-    #     if self.role == "ProgrammingExpert":
-    #         answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
-    #         response += f"\nthe answer is {answer}"
-    #     structured = self._extract_structured_packet(response, self.role)
-    #     self.output_packet = build_output_packet(self.role, response, structured=structured)
-    #     return response
+    def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
+        """ To be overriden by the descendant class """
+        """ Use the processed input to get the result """
+        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
+        message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
+        response = self.llm.gen(message)
+        if self.role == "ProgrammingExpert":
+            answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
+            response += f"\nthe answer is {answer}"
+        structured = self._extract_structured_packet(response, self.role)
+        self.output_packet = build_output_packet(self.role, response, structured=structured)
+        return response
 
     async def _async_execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
         """ To be overriden by the descendant class """
@@ -257,24 +260,22 @@ class MathSolver(Node):
         return response
     
     def _extract_section(self, text: str, section_name: str) -> str:
-        patterns = [
-            rf"\[{re.escape(section_name)}\]\s*(.*?)(?=\n\[[A-Z_]+\]|\Z)",
-            rf"\*\*{re.escape(section_name)}\*\*\s*(.*?)(?=\n\*\*[A-Z_]+\*\*|\Z)",
-        ]
-        for pattern in patterns:
-            m = re.search(pattern, text, flags=re.S)
-            if m:
-                return m.group(1).strip()
-        return ""
+        pattern = rf"^\s*\[{re.escape(section_name)}\]\s*(.*?)(?=^\s*\[[A-Z_]+\]|\Z)"
+        m = re.search(pattern, text, flags=re.S | re.M)
+        return m.group(1).strip() if m else ""
     
     def _extract_bullets(self, text: str) -> List[str]:
         lines = []
         for line in text.splitlines():
             line = line.strip()
+            if not line:
+                continue
             if line.startswith("-"):
                 lines.append(line[1:].strip())
+            elif line.startswith("*"):
+                lines.append(line[1:].strip())
             elif re.match(r"^\d+\.", line):
-                lines.append(line)
+                lines.append(re.sub(r"^\d+\.\s*", "", line))
         return lines
     
     def _extract_structured_packet(self, text: str, role: str) -> Dict[str, Any]:
