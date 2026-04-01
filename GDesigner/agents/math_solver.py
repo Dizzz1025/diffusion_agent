@@ -13,6 +13,8 @@ from utils.context_packets import (
     format_packet_context,
     format_memory_context,
 )
+import re
+
 @AgentRegistry.register('MathSolver')
 class MathSolver(Node):
     def __init__(self, id: str | None =None, role:str = None ,domain: str = "", llm_name: str = "",):
@@ -81,6 +83,40 @@ class MathSolver(Node):
                 "State whether the answer is correct, incorrect, or uncertain."
             )
 
+        output_format_block = """
+        [Output format]
+        Please structure your response using the following sections when applicable.
+
+        [SUMMARY]
+        A short summary of your reasoning.
+
+        [KNOWN_FACTS]
+        List the known quantities, variables, or facts you used.
+        Use bullet points if possible.
+
+        [PLAN]
+        List the main steps if you are decomposing or solving.
+        Use bullet points if possible.
+
+        [CANDIDATE_ANSWER]
+        Give the candidate numerical answer if available.
+
+        [VERDICT]
+        State whether a previous answer is correct or incorrect if you are checking.
+
+        [ERRORS]
+        List any specific errors you found.
+        Use bullet points if possible.
+
+        [CODE_RESULT]
+        If you used code, report the computed result.
+
+        [FINAL]
+        Your final conclusion for this role.
+        """
+
+        user_prompt += "\n\n" + output_format_block
+
         return system_prompt, user_prompt
     
     def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
@@ -113,3 +149,56 @@ class MathSolver(Node):
         print(f"#################response:{response}")
         print(f"#################packet:{self.output_packet}")
         return response
+    
+    def _extract_section(self, text: str, section_name: str) -> str:
+        patterns = [
+            rf"\[{re.escape(section_name)}\]\s*(.*?)(?=\n\[[A-Z_]+\]|\Z)",
+            rf"\*\*{re.escape(section_name)}\*\*\s*(.*?)(?=\n\*\*[A-Z_]+\*\*|\Z)",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text, flags=re.S)
+            if m:
+                return m.group(1).strip()
+        return ""
+    
+    def _extract_bullets(self, text: str) -> List[str]:
+        lines = []
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("-"):
+                lines.append(line[1:].strip())
+            elif re.match(r"^\d+\.", line):
+                lines.append(line)
+        return lines
+    
+    def _extract_structured_packet(self, text: str, role: str) -> Dict[str, Any]:
+        summary = self._extract_section(text, "SUMMARY")
+        known_facts_text = self._extract_section(text, "KNOWN_FACTS")
+        plan_text = self._extract_section(text, "PLAN")
+        candidate_answer = self._extract_section(text, "CANDIDATE_ANSWER")
+        verdict = self._extract_section(text, "VERDICT")
+        errors_text = self._extract_section(text, "ERRORS")
+        code_result = self._extract_section(text, "CODE_RESULT")
+        final_text = self._extract_section(text, "FINAL")
+
+        known_facts = self._extract_bullets(known_facts_text)
+        plan_steps = self._extract_bullets(plan_text)
+        errors_found = self._extract_bullets(errors_text)
+
+        if not candidate_answer:
+            candidate_answer = self._extract_answer_hint(text)
+
+        packet = {
+            "role": role,
+            "summary": summary or self._truncate(text, 240),
+            "known_facts": known_facts,
+            "plan_steps": plan_steps,
+            "candidate_answer": candidate_answer.strip() if candidate_answer else "",
+            "verdict": verdict.strip() if verdict else "",
+            "errors_found": errors_found,
+            "code_result": code_result.strip() if code_result else "",
+            "final_text": final_text.strip() if final_text else "",
+        }
+        return packet
+    
+    
