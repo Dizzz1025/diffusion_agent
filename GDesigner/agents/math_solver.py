@@ -23,7 +23,7 @@ class MathSolver(Node):
         self.prompt_set = PromptSetRegistry.get(domain)
         self.role = self.prompt_set.get_role() if role is None else role
         self.constraint = self.prompt_set.get_constraint(self.role) 
-        
+   
     def _process_inputs(self, raw_inputs:Dict[str,str], spatial_info:Dict[str,Dict], temporal_info:Dict[str,Dict], **kwargs)->List[Any]:
         """ To be overriden by the descendant class """
         """ Process the raw_inputs(most of the time is a List[Dict]) """             
@@ -58,79 +58,173 @@ class MathSolver(Node):
         if memory_context:
             user_prompt += "\n\n" + memory_context
 
-        # 给不同角色再加一层明确要求
-        if self.role == "ProblemDecomposer":
-            user_prompt += (
-                "\n\n[Your required output]\n"
-                "Return a decomposition only: variables, plan_steps, equations.\n"
-                "Do not solve the problem completely."
-            )
-        elif self.role == "MathSolver":
-            user_prompt += (
-                "\n\n[Your required output]\n"
-                "Use the available plan/program/check packets if useful. "
-                "Provide derivation and the final numerical answer in format '####Answer: <number>'."
-            )
-        elif self.role == "ProgrammingExpert":
-            user_prompt += (
-                "\n\n[Your required output]\n"
-                "Write Python code only if useful, then report the program result."
-            )
-        elif self.role == "CalculationChecker":
-            user_prompt += (
-                "\n\n[Your required output]\n"
-                "Verify the candidate answer and key computations. "
-                "State whether the answer is correct, incorrect, or uncertain."
-            )
-
-        output_format_block = """
-        [Output format]
-        Please structure your response using the following sections when applicable.
-
-        [SUMMARY]
-        A short summary of your reasoning.
-
-        [KNOWN_FACTS]
-        List the known quantities, variables, or facts you used.
-        Use bullet points if possible.
-
-        [PLAN]
-        List the main steps if you are decomposing or solving.
-        Use bullet points if possible.
-
-        [CANDIDATE_ANSWER]
-        Give the candidate numerical answer if available.
-
-        [VERDICT]
-        State whether a previous answer is correct or incorrect if you are checking.
-
-        [ERRORS]
-        List any specific errors you found.
-        Use bullet points if possible.
-
-        [CODE_RESULT]
-        If you used code, report the computed result.
-
-        [FINAL]
-        Your final conclusion for this role.
-        """
-
-        user_prompt += "\n\n" + output_format_block
+        user_prompt += "\n\n" + self._get_role_task_block()
+        user_prompt += "\n\n" + self._get_role_output_format_block()
 
         return system_prompt, user_prompt
     
-    def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
-        """ To be overriden by the descendant class """
-        """ Use the processed input to get the result """
-        system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-        message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
-        response = self.llm.gen(message)
-        if self.role == "ProgrammingExpert":
-            answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
-            response += f"\nthe answer is {answer}"
-        structured = self._extract_structured_packet(response, self.role)
-        self.output_packet = build_output_packet(self.role, response, structured=structured)
-        return response
+    def _get_role_task_block(self) -> str:
+        role_task_map = {
+            "ProblemDecomposer": (
+                "[Your task]\n"
+                "Analyze the problem only. Extract variables, quantities, constraints, and a step plan.\n"
+                "Do NOT compute the final answer.\n"
+                "Do not guess missing information.\n"
+                "Focus on problem decomposition rather than long free-form reasoning."
+            ),
+            "MathSolver": (
+                "[Your task]\n"
+                "Solve the problem using useful upstream packets if needed.\n"
+                "You should derive the answer and output the final numerical result.\n"
+                "Prefer concise, correct steps over verbose explanation.\n"
+                "End with '####Answer: <number>'."
+            ),
+            "ProgrammingExpert": (
+                "[Your task]\n"
+                "Translate the math problem into executable Python when helpful.\n"
+                "Focus on formulas, expressions, and program result.\n"
+                "Write runnable Python code only when code is actually useful.\n"
+                "Do not mix explanation inside the code block."
+            ),
+            "CalculationChecker": (
+                "[Your task]\n"
+                "Check whether the candidate answer and computation chain are correct.\n"
+                "Focus on verification, not re-solving from scratch unless necessary.\n"
+                "Clearly state whether the answer is correct, incorrect, or uncertain."
+            ),
+        }
+        return role_task_map.get(
+            self.role,
+            "[Your task]\nSolve the problem carefully."
+        )
+
+    def _get_role_output_format_block(self) -> str:
+        role_format_map = {
+            "ProblemDecomposer": """
+                [Output format]
+                Use exactly these sections.
+
+                [SUMMARY]
+                A brief description of the problem structure.
+
+                [VARIABLES]
+                List the key variables / quantities.
+                Use bullet points.
+
+                [CONSTRAINTS]
+                List the constraints / conditions.
+                Use bullet points.
+
+                [PLAN]
+                List the intended solving steps only.
+                Use bullet points.
+                Do NOT solve them out.
+
+                [EQUATIONS]
+                List useful equations or relations if available.
+
+                [FINAL]
+                One-sentence decomposition conclusion only.
+                """.strip(),
+
+            "MathSolver": """
+                [Output format]
+                Use exactly these sections.
+
+                [SUMMARY]
+                A short summary of the solution idea.
+
+                [USED_PACKETS]
+                List which upstream packets were useful.
+                Use bullet points.
+
+                [KEY_STEPS]
+                List the essential solving steps.
+                Use bullet points.
+
+                [CANDIDATE_ANSWER]
+                Write the candidate numerical answer.
+
+                [FINAL]
+                State the final conclusion briefly, and end with:
+                ####Answer: <number>
+                """.strip(),
+
+            "ProgrammingExpert": """
+                [Output format]
+                Use exactly these sections.
+
+                [SUMMARY]
+                A short summary of the computational approach.
+
+                [FORMULATION]
+                Briefly describe how the problem is converted into formulas / code.
+
+                [PYTHON_CODE]
+                Provide only Python code in a fenced code block.
+
+                [CODE_RESULT]
+                Report the actual computed result from the code.
+
+                [CANDIDATE_ANSWER]
+                Write the candidate numerical answer.
+
+                [FINAL]
+                State the final conclusion briefly.
+                """.strip(),
+
+            "CalculationChecker": """
+                [Output format]
+                Use exactly these sections.
+
+                [SUMMARY]
+                A short summary of what was checked.
+
+                [TARGET_ANSWER]
+                State the answer / computation target being checked.
+
+                [CHECK_STEPS]
+                List the key verification steps.
+                Use bullet points.
+
+                [VERDICT]
+                Output one of: correct / incorrect / uncertain
+
+                [ERRORS]
+                List specific errors if found.
+                Use bullet points.
+                If none, write "None".
+
+                [CORRECT_ANSWER]
+                If the target answer is wrong and you can determine the right one, write it here.
+
+                [FINAL]
+                State the final checking conclusion briefly.
+                """.strip(),
+                        }
+        return role_format_map.get(self.role,
+                                """
+                                [Output format]
+
+                                [SUMMARY]
+                                ...
+
+                                [FINAL]
+                                ...
+                                """.strip())
+
+    # def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
+    #     """ To be overriden by the descendant class """
+    #     """ Use the processed input to get the result """
+    #     system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
+    #     message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
+    #     response = self.llm.gen(message)
+    #     if self.role == "ProgrammingExpert":
+    #         answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
+    #         response += f"\nthe answer is {answer}"
+    #     structured = self._extract_structured_packet(response, self.role)
+    #     self.output_packet = build_output_packet(self.role, response, structured=structured)
+    #     return response
 
     async def _async_execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
         """ To be overriden by the descendant class """
@@ -139,10 +233,22 @@ class MathSolver(Node):
         system_prompt, user_prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
         message = [{'role':'system','content':system_prompt},{'role':'user','content':user_prompt}]
         response = await self.llm.agen(message)
+
+        executed_code_result = ""
         if self.role == "ProgrammingExpert":
-            answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
-            response += f"\nthe answer is {answer}"
+            code = self._extract_python_code(response)
+            if code:
+                try:
+                    executed_code_result = str(execute_code_get_return(code))
+                except Exception as e:
+                    executed_code_result = f"EXECUTION_ERROR: {e}"
+
         structured = self._extract_structured_packet(response, self.role)
+        if self.role == "ProgrammingExpert" and executed_code_result:
+            structured["code_result"] = executed_code_result
+            if not structured.get("candidate_answer"):
+                structured["candidate_answer"] = executed_code_result
+
         self.output_packet = build_output_packet(self.role, response, structured=structured)
         print(f"#################system_prompt:{system_prompt}")
         print(f"#################user_prompt:{user_prompt}")
@@ -172,32 +278,138 @@ class MathSolver(Node):
         return lines
     
     def _extract_structured_packet(self, text: str, role: str) -> Dict[str, Any]:
-        summary = self._extract_section(text, "SUMMARY")
-        known_facts_text = self._extract_section(text, "KNOWN_FACTS")
-        plan_text = self._extract_section(text, "PLAN")
-        candidate_answer = self._extract_section(text, "CANDIDATE_ANSWER")
-        verdict = self._extract_section(text, "VERDICT")
-        errors_text = self._extract_section(text, "ERRORS")
-        code_result = self._extract_section(text, "CODE_RESULT")
-        final_text = self._extract_section(text, "FINAL")
-
-        known_facts = self._extract_bullets(known_facts_text)
-        plan_steps = self._extract_bullets(plan_text)
-        errors_found = self._extract_bullets(errors_text)
-
-        if not candidate_answer:
-            candidate_answer = self._extract_answer_hint(text)
-
         packet = {
             "role": role,
-            "summary": summary or self._truncate(text, 240),
-            "known_facts": known_facts,
-            "plan_steps": plan_steps,
-            "candidate_answer": candidate_answer.strip() if candidate_answer else "",
-            "verdict": verdict.strip() if verdict else "",
-            "errors_found": errors_found,
-            "code_result": code_result.strip() if code_result else "",
-            "final_text": final_text.strip() if final_text else "",
+            "summary": "",
+            "known_facts": [],
+            "plan_steps": [],
+            "candidate_answer": "",
+            "verdict": "",
+            "errors_found": [],
+            "code_result": "",
+            "final_text": "",
         }
+
+        if role == "ProblemDecomposer":
+            summary = self._extract_section(text, "SUMMARY")
+            variables = self._extract_bullets(self._extract_section(text, "VARIABLES"))
+            constraints = self._extract_bullets(self._extract_section(text, "CONSTRAINTS"))
+            plan_steps = self._extract_bullets(self._extract_section(text, "PLAN"))
+            equations = self._extract_lines(self._extract_section(text, "EQUATIONS"))
+            final_text = self._extract_section(text, "FINAL")
+
+            packet.update({
+                "summary": summary or self._truncate(text, 240),
+                "known_facts": variables + constraints,
+                "plan_steps": plan_steps,
+                "final_text": final_text.strip() if final_text else "",
+                "variables": variables,
+                "constraints": constraints,
+                "equations": equations,
+            })
+            return packet
+
+        if role == "MathSolver":
+            summary = self._extract_section(text, "SUMMARY")
+            used_packets = self._extract_bullets(self._extract_section(text, "USED_PACKETS"))
+            key_steps = self._extract_bullets(self._extract_section(text, "KEY_STEPS"))
+            candidate_answer = self._extract_section(text, "CANDIDATE_ANSWER")
+            final_text = self._extract_section(text, "FINAL")
+
+            if not candidate_answer:
+                candidate_answer = self._extract_answer_hint(text)
+
+            packet.update({
+                "summary": summary or self._truncate(text, 240),
+                "known_facts": used_packets,
+                "plan_steps": key_steps,
+                "candidate_answer": candidate_answer.strip() if candidate_answer else "",
+                "final_text": final_text.strip() if final_text else "",
+                "used_packets": used_packets,
+            })
+            return packet
+
+        if role == "ProgrammingExpert":
+            summary = self._extract_section(text, "SUMMARY")
+            formulation = self._extract_section(text, "FORMULATION")
+            code = self._extract_python_code(text)
+            code_result = self._extract_section(text, "CODE_RESULT")
+            candidate_answer = self._extract_section(text, "CANDIDATE_ANSWER")
+            final_text = self._extract_section(text, "FINAL")
+
+            if not candidate_answer:
+                candidate_answer = self._extract_answer_hint(text)
+
+            packet.update({
+                "summary": summary or self._truncate(text, 240),
+                "known_facts": self._extract_lines(formulation),
+                "plan_steps": [],
+                "candidate_answer": candidate_answer.strip() if candidate_answer else "",
+                "code_result": code_result.strip() if code_result else "",
+                "final_text": final_text.strip() if final_text else "",
+                "formulation": formulation.strip() if formulation else "",
+                "python_code": code,
+            })
+            return packet
+
+        if role == "CalculationChecker":
+            summary = self._extract_section(text, "SUMMARY")
+            target_answer = self._extract_section(text, "TARGET_ANSWER")
+            check_steps = self._extract_bullets(self._extract_section(text, "CHECK_STEPS"))
+            verdict = self._extract_section(text, "VERDICT")
+            errors = self._extract_bullets(self._extract_section(text, "ERRORS"))
+            correct_answer = self._extract_section(text, "CORRECT_ANSWER")
+            final_text = self._extract_section(text, "FINAL")
+
+            if not correct_answer and verdict.strip().lower() == "correct":
+                correct_answer = target_answer
+
+            packet.update({
+                "summary": summary or self._truncate(text, 240),
+                "known_facts": [target_answer] if target_answer else [],
+                "plan_steps": check_steps,
+                "candidate_answer": correct_answer.strip() if correct_answer else "",
+                "verdict": verdict.strip() if verdict else "",
+                "errors_found": errors,
+                "final_text": final_text.strip() if final_text else "",
+                "target_answer": target_answer.strip() if target_answer else "",
+                "correct_answer": correct_answer.strip() if correct_answer else "",
+            })
+            return packet
+
+        # fallback
+        summary = self._extract_section(text, "SUMMARY")
+        final_text = self._extract_section(text, "FINAL")
+        candidate_answer = self._extract_answer_hint(text)
+
+        packet.update({
+            "summary": summary or self._truncate(text, 240),
+            "candidate_answer": candidate_answer.strip() if candidate_answer else "",
+            "final_text": final_text.strip() if final_text else "",
+        })
         return packet
     
+    def _extract_lines(self, text: str) -> List[str]:
+        items = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            line = re.sub(r"^[-*]\s*", "", line)
+            items.append(line)
+        return items
+
+    def _extract_python_code(self, text: str) -> str:
+        # 优先提取 fenced code block
+        m = re.search(r"```python\s*(.*?)```", text, flags=re.S | re.I)
+        if m:
+            return m.group(1).strip()
+
+        # 其次提取 [PYTHON_CODE] section
+        code_text = self._extract_section(text, "PYTHON_CODE")
+        if code_text:
+            code_text = re.sub(r"^```(?:python)?\s*", "", code_text, flags=re.I)
+            code_text = re.sub(r"\s*```$", "", code_text)
+            return code_text.strip()
+
+        return ""
