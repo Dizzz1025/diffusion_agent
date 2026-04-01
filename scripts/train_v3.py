@@ -159,8 +159,8 @@ async def train_graph_generator_from_memory(
 
 async def main():
     dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
-    llm_name = 'Meta-Llama-3.1-8B-Instruct'
+    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    # llm_name = 'Meta-Llama-3.1-8B-Instruct'
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1
@@ -173,7 +173,7 @@ async def main():
         {"role": "ProgrammingExpert"},
     ]
 
-    save_dir = Path("results/v5")
+    save_dir = Path("results/v6")
     ckpt_dir = save_dir / "checkpoints"
     save_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -286,7 +286,7 @@ async def main():
 
     history = []
     best_reward_mean = float("-inf")
-    num_updates = 50
+    num_updates = 100
     batch_episodes = 16
 
     print("[V3] Step 6-8: train router under graph constraints and execute the selected trace directly.")
