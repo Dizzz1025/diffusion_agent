@@ -128,8 +128,8 @@ class MathSolver(Node):
         if self.role == "ProgrammingExpert":
             answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
             response += f"\nthe answer is {answer}"
-
-        self.output_packet = build_output_packet(self.role, response)
+        structured = self._extract_structured_packet(response, self.role)
+        self.output_packet = build_output_packet(self.role, response, structured=structured)
         return response
 
     async def _async_execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
@@ -142,8 +142,8 @@ class MathSolver(Node):
         if self.role == "ProgrammingExpert":
             answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
             response += f"\nthe answer is {answer}"
-
-        self.output_packet = build_output_packet(self.role, response)
+        structured = self._extract_structured_packet(response, self.role)
+        self.output_packet = build_output_packet(self.role, response, structured=structured)
         print(f"#################system_prompt:{system_prompt}")
         print(f"#################user_prompt:{user_prompt}")
         print(f"#################response:{response}")
@@ -200,5 +200,4 @@ class MathSolver(Node):
             "final_text": final_text.strip() if final_text else "",
         }
         return packet
-    
     

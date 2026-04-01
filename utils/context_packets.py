@@ -62,20 +62,29 @@ def infer_packet_type(role: str) -> str:
     return mapping.get(role, "generic")
 
 
-def build_output_packet(role: str, text: str) -> Dict[str, Any]:
+def build_output_packet(role: str, text: str, structured: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     packet_type = infer_packet_type(role)
+
+    structured = structured or {}
+
     packet = {
         "packet_type": packet_type,
         "role": role,
         "raw_text": text,
-        "summary": short_text(text, 300),
-        "candidate_answer": extract_final_answer(text),
+        "summary": structured.get("summary", "") or short_text(text, 300),
+        "known_facts": structured.get("known_facts", []),
+        "plan_steps": structured.get("plan_steps", []),
+        "candidate_answer": structured.get("candidate_answer", "") or extract_final_answer(text),
+        "verdict": structured.get("verdict", ""),
+        "errors_found": structured.get("errors_found", []),
+        "code_result": structured.get("code_result", ""),
+        "final_text": structured.get("final_text", ""),
     }
 
     if packet_type == "program":
         packet["code"] = extract_code_block(text)
 
-    if packet_type == "check":
+    if packet_type == "check" and not packet["verdict"]:
         lowered = (text or "").lower()
         packet["verdict"] = (
             "incorrect" if "incorrect" in lowered or "error" in lowered
@@ -152,25 +161,51 @@ def build_memory_packets(memory_summary: Optional[Dict[str, Any]], top_k: int = 
 def format_packet_context(selected: Dict[str, List[Dict[str, Any]]]) -> str:
     lines = []
 
+    def render_packet(item):
+        pkt = item["packet"]
+        out = [f"- from {item['node_id']} ({item['role']}, {pkt['packet_type']}):"]
+
+        if pkt.get("summary"):
+            out.append(f"  summary: {pkt['summary']}")
+
+        if pkt.get("known_facts"):
+            out.append("  known_facts:")
+            for fact in pkt["known_facts"][:4]:
+                out.append(f"  - {fact}")
+
+        if pkt.get("plan_steps"):
+            out.append("  plan_steps:")
+            for step in pkt["plan_steps"][:3]:
+                out.append(f"  - {step}")
+
+        if pkt.get("candidate_answer"):
+            out.append(f"  candidate_answer: {pkt['candidate_answer']}")
+
+        if pkt.get("verdict"):
+            out.append(f"  verdict: {pkt['verdict']}")
+
+        if pkt.get("errors_found"):
+            out.append("  errors_found:")
+            for err in pkt["errors_found"][:3]:
+                out.append(f"  - {err}")
+
+        if pkt.get("code_result"):
+            out.append(f"  code_result: {pkt['code_result']}")
+
+        if pkt.get("final_text"):
+            out.append(f"  final_text: {pkt['final_text']}")
+
+        return "\n".join(out)
+
     if selected["spatial"]:
         lines.append("[Visible collaboration packets]")
         for item in selected["spatial"]:
-            pkt = item["packet"]
-            lines.append(
-                f"- from {item['node_id']} ({item['role']}, {pkt['packet_type']}): "
-                f"summary={pkt.get('summary', '')}; "
-                f"candidate_answer={pkt.get('candidate_answer', '')}"
-            )
+            lines.append(render_packet(item))
 
     if selected["temporal"]:
         lines.append("\n[Temporal packets]")
         for item in selected["temporal"]:
-            pkt = item["packet"]
-            lines.append(
-                f"- from {item['node_id']} ({item['role']}, {pkt['packet_type']}): "
-                f"summary={pkt.get('summary', '')}; "
-                f"candidate_answer={pkt.get('candidate_answer', '')}"
-            )
+            lines.append(render_packet(item))
 
     return "\n".join(lines).strip()
 
