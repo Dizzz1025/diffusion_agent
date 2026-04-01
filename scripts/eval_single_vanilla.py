@@ -99,7 +99,6 @@ async def evaluate(args: argparse.Namespace) -> None:
 
     print(f"[vanilla] loaded {len(tasks)} tasks from {args.dataset_json}")
     print(f"[vanilla] model = {args.llm_name}")
-    tasks = tasks[:2]
     for i, task in enumerate(tasks):
         record = await eval_one(llm=llm, adapter=adapter, task=task, idx=i)
         records.append(record)
@@ -158,7 +157,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--llm_name",
         type=str,
-        default="Meta-Llama-3.1-8B-Instruct",
+        # default="Meta-Llama-3.1-8B-Instruct",
+        default = "/home/zhangdi24/Qwen2.5-7B-Instruct",
         help="Model name passed to your OpenAI-compatible backend.",
     )
     parser.add_argument(
