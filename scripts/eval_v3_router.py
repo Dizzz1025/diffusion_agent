@@ -166,8 +166,8 @@ async def rollout_trace_greedy(
 async def evaluate():
     # ===== 这里按你的实际路径改 =====
     dataset_json = "my_datasets/gsm8k/gsm8k_test.jsonl"
-    llm_name = "Meta-Llama-3.1-8B-Instruct"
-    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    # llm_name = "Meta-Llama-3.1-8B-Instruct"
+    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1
@@ -251,7 +251,7 @@ async def evaluate():
     print(f"[eval] loaded memory from {memory_path}")
     print(f"[eval] loaded router ckpt from {ckpt_path}")
 
-    tasks = tasks[:12]
+    # tasks = tasks[:12]
     for i, task in enumerate(tasks):
         # 因为 env.reset() 内部会 random.choice(self.tasks)
         # 所以这里每次只塞当前 task，保证评估顺序正确
