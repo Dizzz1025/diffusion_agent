@@ -219,17 +219,17 @@ async def main():
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
 
     memory_bank = TrajectoryMemoryBank(max_size=300)
-    # await bootstrap_memory_bank(
-    #     tasks=tasks,
-    #     task_adapter=adapter,
-    #     executor=executor,
-    #     reward_calculator=reward_calculator,
-    #     memory_bank=memory_bank,
-    #     default_agent_names=agent_names,
-    #     default_node_kwargs=node_kwargs,
-    #     bootstrap_task_limit=100,
-    #     keep_top_k_per_task=2,
-    # )
+    await bootstrap_memory_bank(
+        tasks=tasks,
+        task_adapter=adapter,
+        executor=executor,
+        reward_calculator=reward_calculator,
+        memory_bank=memory_bank,
+        default_agent_names=agent_names,
+        default_node_kwargs=node_kwargs,
+        bootstrap_task_limit=100,
+        keep_top_k_per_task=2,
+    )
     # memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
     # memory_bank.load_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
     memory_bank.load_jsonl("/home/zhangdi24/diffusion_agent/results/v3/memory_bootstrap.jsonl")

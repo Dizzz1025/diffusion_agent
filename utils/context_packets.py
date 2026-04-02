@@ -50,6 +50,28 @@ ROLE_PACKET_VIEW = {
     },
 }
 
+ROLE_PACKET_SCHEMA = {
+    "ProblemDecomposer": {
+        "public_fields": ["summary", "known_facts", "plan_steps", "final_text"],
+        "extra_fields": ["variables", "constraints", "equations"],
+    },
+    "MathSolver": {
+        "public_fields": ["summary", "known_facts", "plan_steps", "candidate_answer", "final_text"],
+        "extra_fields": ["used_packets", "key_steps"],
+    },
+    "ProgrammingExpert": {
+        "public_fields": ["summary", "known_facts", "candidate_answer", "code_result", "final_text"],
+        "extra_fields": ["formulation", "code"],
+    },
+    "CalculationChecker": {
+        "public_fields": ["summary", "known_facts", "plan_steps", "candidate_answer", "verdict", "errors_found", "final_text"],
+        "extra_fields": ["target_answer", "check_steps", "correct_answer"],
+    },
+    "default": {
+        "public_fields": ["summary", "known_facts", "plan_steps", "candidate_answer", "final_text"],
+        "extra_fields": [],
+    },
+}
 
 def extract_final_answer(text: str) -> str:
     if not text:
@@ -92,27 +114,40 @@ def infer_packet_type(role: str) -> str:
 
 def build_output_packet(role: str, text: str, structured: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     packet_type = infer_packet_type(role)
-
     structured = structured or {}
+
+    schema = ROLE_PACKET_SCHEMA.get(role, ROLE_PACKET_SCHEMA["default"])
 
     packet = {
         "packet_type": packet_type,
         "role": role,
         "raw_text": text,
-        "summary": structured.get("summary", "") or short_text(text, 300),
-        "known_facts": structured.get("known_facts", []),
-        "plan_steps": structured.get("plan_steps", []),
-        "candidate_answer": structured.get("candidate_answer", "") or extract_final_answer(text),
-        "verdict": structured.get("verdict", ""),
-        "errors_found": structured.get("errors_found", []),
-        "code_result": structured.get("code_result", ""),
-        "final_text": structured.get("final_text", ""),
     }
 
-    if packet_type == "program":
-        packet["code"] = extract_code_block(text)
+    # 1) 先写公共字段
+    for field in schema["public_fields"]:
+        if field == "summary":
+            packet[field] = structured.get("summary", "") or short_text(text, 300)
+        elif field == "candidate_answer":
+            packet[field] = structured.get("candidate_answer", "") or extract_final_answer(text)
+        else:
+            value = structured.get(field)
+            if value not in (None, "", [], {}):
+                packet[field] = value
 
-    if packet_type == "check" and not packet["verdict"]:
+    # 2) 再写角色专属字段
+    for field in schema.get("extra_fields", []):
+        value = structured.get(field)
+        if value not in (None, "", [], {}):
+            packet[field] = value
+
+    # 3) 兼容旧逻辑
+    if packet_type == "program" and not packet.get("code"):
+        code = extract_code_block(text)
+        if code:
+            packet["code"] = code
+
+    if packet_type == "check" and not packet.get("verdict"):
         lowered = (text or "").lower()
         packet["verdict"] = (
             "incorrect" if "incorrect" in lowered or "error" in lowered
