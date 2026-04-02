@@ -15,6 +15,7 @@ from utils.context_packets import (
     format_memory_context,
 )
 import re
+from textwrap import dedent
 
 @AgentRegistry.register('MathSolver')
 class MathSolver(Node):
@@ -73,14 +74,17 @@ class MathSolver(Node):
                 "Analyze the problem only. Extract variables, quantities, constraints, and a step plan.\n"
                 "Do NOT compute the final answer.\n"
                 "Do not guess missing information.\n"
+                "Highlight the critical geometric/algebraic quantity that must be computed correctly.\n"
+                "If a naive symmetric shortcut may be invalid, mention that the correct quantity should be derived carefully.\n"
                 "Focus on problem decomposition rather than long free-form reasoning."
             ),
             "MathSolver": (
                 "[Your task]\n"
-                "Solve the problem using useful upstream packets if needed.\n"
-                "You should derive the answer and output the final numerical result.\n"
-                "Prefer concise, correct steps over verbose explanation.\n"
-                "End with '####Answer: <number>'."
+                "Solve the problem step by step.\n"
+                "If checker feedback is provided, revise the previous solution by directly fixing the flagged issue.\n"
+                "Do not ignore checker feedback.\n"
+                "Do not jump to an unsupported answer.\n"
+                "End with '####Answer: <final_answer>'."
             ),
             "ProgrammingExpert": (
                 "[Your task]\n"
@@ -93,9 +97,11 @@ class MathSolver(Node):
             ),
             "CalculationChecker": (
                 "[Your task]\n"
-                "Check whether the candidate answer and computation chain are correct.\n"
-                "Focus on verification, not re-solving from scratch unless necessary.\n"
-                "Clearly state whether the answer is correct, incorrect, or uncertain."
+                "Check whether the current derivation and candidate answer are valid.\n"
+                "Your main job is to identify errors, missing steps, unsupported jumps, or invalid formulas.\n"
+                "You do not need to fully solve the problem unless necessary.\n"
+                "If the solution is flawed, provide actionable revision feedback for MathSolver.\n"
+                "Output a clear verdict: pass, revise, or fail."
             ),
         }
         return role_task_map.get(
@@ -105,7 +111,7 @@ class MathSolver(Node):
 
     def _get_role_output_format_block(self) -> str:
         role_format_map = {
-            "ProblemDecomposer": """
+            "ProblemDecomposer": dedent("""
                 [Output format]
                 Use exactly these sections.
 
@@ -130,9 +136,9 @@ class MathSolver(Node):
 
                 [FINAL]
                 One-sentence decomposition conclusion only.
-                """.strip(),
+            """).strip(),
 
-            "MathSolver": """
+            "MathSolver": dedent("""
                 [Output format]
                 Use exactly these sections.
 
@@ -143,19 +149,26 @@ class MathSolver(Node):
                 List which upstream packets were useful.
                 Use bullet points starting with "-".
 
-                [KEY_STEPS]
-                List the essential solving steps.
+                [DERIVATION]
+                Show the essential derivation steps in order.
                 Use bullet points starting with "-".
+                Every nontrivial formula must be connected to the current problem.
+                Do not skip the step that directly leads to the final answer.
+
+                [SANITY_CHECK]
+                Briefly check whether the result is reasonable.
+                Examples: sign, magnitude, substitution, geometric feasibility.
+                If no simple check is available, write "None".
 
                 [CANDIDATE_ANSWER]
-                Write the candidate numerical answer.
+                Write the final candidate answer only.
 
                 [FINAL]
                 State the final conclusion briefly, and end with:
-                ####Answer: <number>
-                """.strip(),
+                ####Answer: <final_answer>
+            """).strip(),
 
-            "ProgrammingExpert": """
+            "ProgrammingExpert": dedent("""
                 [Output format]
                 Use exactly these sections.
 
@@ -177,9 +190,9 @@ class MathSolver(Node):
 
                 [FINAL]
                 State the final conclusion briefly.
-                """.strip(),
+            """).strip(),
 
-            "CalculationChecker": """
+            "CalculationChecker": dedent("""
                 [Output format]
                 Use exactly these sections.
 
@@ -189,9 +202,10 @@ class MathSolver(Node):
                 [TARGET_ANSWER]
                 State the answer / computation target being checked.
 
-                [CHECK_STEPS]
-                List the key verification steps.
+                [RECOMPUTATION]
+                Recompute the critical quantities needed to verify the answer.
                 Use bullet points starting with "-".
+                If the original derivation is incomplete, explicitly fill in the missing steps.
 
                 [VERDICT]
                 Output one of: correct / incorrect / uncertain
@@ -206,18 +220,21 @@ class MathSolver(Node):
 
                 [FINAL]
                 State the final checking conclusion briefly.
-                """.strip(),
-                        }
-        return role_format_map.get(self.role,
-                                """
-                                [Output format]
+            """).strip(),
+        }
 
-                                [SUMMARY]
-                                ...
+        return role_format_map.get(
+            self.role,
+            dedent("""
+                [Output format]
 
-                                [FINAL]
-                                ...
-                                """.strip())
+                [SUMMARY]
+                ...
+
+                [FINAL]
+                ...
+            """).strip()
+        )
 
     def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
         """ To be overriden by the descendant class """
@@ -281,6 +298,21 @@ class MathSolver(Node):
                 lines.append(re.sub(r"^\d+\.\s*", "", line))
         return lines
     
+    def _extract_bullets_from_first_available(self, text: str, section_names: List[str]) -> List[str]:
+        for name in section_names:
+            sec = self._extract_section(text, name)
+            if sec:
+                return self._extract_bullets(sec)
+        return []
+
+    def _count_substantive_steps(self, steps: List[str]) -> int:
+        cnt = 0
+        for s in steps:
+            s = s.strip()
+            if len(s) >= 12:
+                cnt += 1
+        return cnt
+
     def _extract_structured_packet(self, text: str, role: str) -> Dict[str, Any]:
         packet = {
             "role": role,
@@ -316,20 +348,26 @@ class MathSolver(Node):
         if role == "MathSolver":
             summary = self._extract_section(text, "SUMMARY")
             used_packets = self._extract_bullets(self._extract_section(text, "USED_PACKETS"))
-            key_steps = self._extract_bullets(self._extract_section(text, "KEY_STEPS"))
+            derivation = self._extract_bullets_from_first_available(text, ["DERIVATION", "KEY_STEPS"])
+            sanity_check = self._extract_section(text, "SANITY_CHECK")
             candidate_answer = self._extract_section(text, "CANDIDATE_ANSWER")
             final_text = self._extract_section(text, "FINAL")
 
             if not candidate_answer:
                 candidate_answer = self._extract_answer_hint(text)
 
+            low_confidence = bool(candidate_answer.strip()) and self._count_substantive_steps(derivation) < 2
+
             packet.update({
                 "summary": summary or self._truncate(text, 240),
                 "known_facts": used_packets,
-                "plan_steps": key_steps,
+                "plan_steps": derivation,              # 兼容旧下游
                 "candidate_answer": candidate_answer.strip() if candidate_answer else "",
                 "final_text": final_text.strip() if final_text else "",
                 "used_packets": used_packets,
+                "derivation": derivation,
+                "sanity_check": sanity_check.strip() if sanity_check else "",
+                "low_confidence": low_confidence,
             })
             return packet
 
@@ -359,7 +397,7 @@ class MathSolver(Node):
         if role == "CalculationChecker":
             summary = self._extract_section(text, "SUMMARY")
             target_answer = self._extract_section(text, "TARGET_ANSWER")
-            check_steps = self._extract_bullets(self._extract_section(text, "CHECK_STEPS"))
+            recomputation = self._extract_bullets_from_first_available(text, ["RECOMPUTATION", "CHECK_STEPS"])
             verdict = self._extract_section(text, "VERDICT")
             errors = self._extract_bullets(self._extract_section(text, "ERRORS"))
             correct_answer = self._extract_section(text, "CORRECT_ANSWER")
@@ -371,13 +409,14 @@ class MathSolver(Node):
             packet.update({
                 "summary": summary or self._truncate(text, 240),
                 "known_facts": [target_answer] if target_answer else [],
-                "plan_steps": check_steps,
+                "plan_steps": recomputation,           # 兼容旧下游
                 "candidate_answer": correct_answer.strip() if correct_answer else "",
                 "verdict": verdict.strip() if verdict else "",
                 "errors_found": errors,
                 "final_text": final_text.strip() if final_text else "",
                 "target_answer": target_answer.strip() if target_answer else "",
                 "correct_answer": correct_answer.strip() if correct_answer else "",
+                "recomputation": recomputation,
             })
             return packet
 

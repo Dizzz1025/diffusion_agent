@@ -258,6 +258,7 @@ def bootstrap_candidate_traces(num_agents: int) -> List[List[int]]:
     # 0=MathSolver, 1=ProblemDecomposer, 2=CalculationChecker, 3=ProgrammingExpert
     traces = [
         [1, 0, 2],
+        [1, 0, 3, 2],
         [1, 0, 2, 0],
         [0, 2],
         [1, 3, 0, 2],
