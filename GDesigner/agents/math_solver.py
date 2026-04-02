@@ -11,6 +11,7 @@ from utils.context_packets import (
     build_memory_packets,
     select_context_packets,
     format_packet_context,
+    render_role_specific_packet_context,
     format_memory_context,
 )
 import re
@@ -39,7 +40,9 @@ class MathSolver(Node):
             spatial_info=spatial_info,
             temporal_info=temporal_info,
         )
-        packet_context = format_packet_context(selected_packets)
+        packet_context = render_role_specific_packet_context(self.role, selected_packets)
+        if packet_context:
+            packet_context = f"[Structured predecessor context]\n{packet_context}\n"
 
         memory_packets = build_memory_packets(memory_summary, top_k=2)
         memory_context = format_memory_context(memory_packets)

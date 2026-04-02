@@ -8,6 +8,93 @@ from ..prompt.prompt_set_registry import PromptSetRegistry
 from ..tools.coding.python_executor import PyExecutor
 from ..utils.const import GDesigner_ROOT
 
+def _render_packet_for_reference(info: Dict[str, Any]) -> str:
+    role = info.get("role", "Unknown")
+    packet = info.get("packet") or {}
+    packet_type = packet.get("packet_type", "generic")
+
+    if not packet:
+        raw = (info.get("output") or "").strip()
+        return f"role={role}, raw_output={raw}"
+
+    lines = [f"role={role}, packet_type={packet_type}"]
+
+    if packet.get("summary"):
+        lines.append(f"summary: {packet['summary']}")
+
+    if packet.get("known_facts"):
+        lines.append("known_facts:")
+        for fact in packet["known_facts"][:4]:
+            lines.append(f"- {fact}")
+
+    if packet.get("plan_steps"):
+        lines.append("plan_steps:")
+        for step in packet["plan_steps"][:4]:
+            lines.append(f"- {step}")
+
+    if packet.get("candidate_answer"):
+        lines.append(f"candidate_answer: {packet['candidate_answer']}")
+
+    if packet.get("verdict"):
+        lines.append(f"verdict: {packet['verdict']}")
+
+    if packet.get("errors_found"):
+        lines.append("errors_found:")
+        for err in packet["errors_found"][:4]:
+            lines.append(f"- {err}")
+
+    if packet.get("code_result"):
+        lines.append(f"code_result: {packet['code_result']}")
+
+    if packet.get("final_text"):
+        lines.append(f"final_text: {packet['final_text']}")
+
+    return "\n".join(lines)
+
+
+def _build_final_reference_context(spatial_info: Dict[str, Any]) -> str:
+    blocks = []
+    for node_id, info in spatial_info.items():
+        block = _render_packet_for_reference(info)
+        blocks.append(f"{node_id}:\n{block}")
+    return "\n\n".join(blocks).strip()
+
+def _packet_preferred_answer(info: Dict[str, Any]) -> str:
+    packet = info.get("packet") or {}
+    packet_type = packet.get("packet_type", "")
+    verdict = str(packet.get("verdict", "") or "").strip().lower()
+
+    # checker 的结论优先级最高
+    if packet_type == "check":
+        if verdict == "correct" and packet.get("candidate_answer"):
+            return str(packet["candidate_answer"]).strip()
+        if packet.get("correct_answer"):
+            return str(packet["correct_answer"]).strip()
+        if packet.get("candidate_answer"):
+            return str(packet["candidate_answer"]).strip()
+
+    # programmer 优先取执行结果，其次取候选答案
+    if packet_type == "program":
+        if packet.get("code_result"):
+            return str(packet["code_result"]).strip()
+        if packet.get("candidate_answer"):
+            return str(packet["candidate_answer"]).strip()
+
+    # solver 直接取候选答案
+    if packet_type == "solve":
+        if packet.get("candidate_answer"):
+            return str(packet["candidate_answer"]).strip()
+
+    return ""
+
+
+def _fallback_processed_answer(prompt_set, info: Dict[str, Any]) -> str:
+    raw_output = info.get("output", "") or ""
+    try:
+        return str(prompt_set.postprocess_answer(raw_output)).strip()
+    except Exception:
+        return raw_output.strip()
+
 @AgentRegistry.register('FinalWriteCode')
 class FinalWriteCode(Node):
     def __init__(self, id: str | None =None,  domain: str = "", llm_name: str = "",):
@@ -75,17 +162,19 @@ class FinalRefer(Node):
         self.prompt_set = PromptSetRegistry.get(domain)
 
     def _process_inputs(self, raw_inputs:Dict[str,str], spatial_info:Dict[str,Any], temporal_info:Dict[str,Any], **kwargs)->List[Any]:
-        """ To be overriden by the descendant class """
-        """ Process the raw_inputs(most of the time is a List[Dict]) """
         self.role = self.prompt_set.get_decision_role()
-        self.constraint = self.prompt_set.get_decision_constraint()          
+        self.constraint = self.prompt_set.get_decision_constraint()
         system_prompt = f"{self.role}.\n {self.constraint}"
-        
-        spatial_str = ""
-        for id, info in spatial_info.items():
-            spatial_str += id + ": " + info['output'] + "\n\n"
+
+        spatial_str = _build_final_reference_context(spatial_info)
+
         decision_few_shot = self.prompt_set.get_decision_few_shot()
-        user_prompt = f"{decision_few_shot} The task is:\n\n {raw_inputs['task']}.\n At the same time, the output of other agents is as follows:\n\n{spatial_str}"
+        user_prompt = (
+            f"{decision_few_shot} "
+            f"The task is:\n\n{raw_inputs['task']}.\n"
+            f"At the same time, the structured outputs of other agents are as follows:\n\n"
+            f"{spatial_str}"
+        )
         return system_prompt, user_prompt
                 
     def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
@@ -121,27 +210,29 @@ class FinalDirect(Node):
         """ Process the raw_inputs(most of the time is a List[Dict]) """
         return None
                 
-    def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
-        """ To be overriden by the descendant class """
-        """ Use the processed input to get the result """
-        output = ""
-        info_list = []
+    def _execute(self, input:Dict[str,str], spatial_info:Dict[str,Any], temporal_info:Dict[str,Any], **kwargs):
+        candidates = []
+
         for info in spatial_info.values():
-            info_list.append(info['output'])
-        if len(info_list):
-            output = info_list[-1]
-        return output
+            ans = _packet_preferred_answer(info)
+            if not ans:
+                ans = _fallback_processed_answer(self.prompt_set, info)
+            if ans:
+                candidates.append(ans)
+
+        return candidates[-1] if candidates else ""
     
-    async def _async_execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
-        """ To be overriden by the descendant class """
-        """ Use the processed input to get the result """
-        output = ""
-        info_list = []
+    async def _async_execute(self, input:Dict[str,str], spatial_info:Dict[str,Any], temporal_info:Dict[str,Any], **kwargs):
+        candidates = []
+
         for info in spatial_info.values():
-            info_list.append(info['output'])
-        if len(info_list):
-            output = info_list[-1]
-        return output
+            ans = _packet_preferred_answer(info)
+            if not ans:
+                ans = _fallback_processed_answer(self.prompt_set, info)
+            if ans:
+                candidates.append(ans)
+
+        return candidates[-1] if candidates else ""
 
 
 @AgentRegistry.register('FinalMajorVote')
@@ -156,37 +247,54 @@ class FinalMajorVote(Node):
         """ Process the raw_inputs(most of the time is a List[Dict]) """
         return None
     
-    def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
-        """ To be overriden by the descendant class """
-        """ Use the processed input to get the result """
+    def _execute(self, input:Dict[str,str], spatial_info:Dict[str,Any], temporal_info:Dict[str,Any], **kwargs):
         output_num = {}
         max_output = ""
         max_output_num = 0
+
         for info in spatial_info.values():
-            processed_output = self.prompt_set.postprocess_answer(info['output'])
+            processed_output = _packet_preferred_answer(info)
+            if not processed_output:
+                processed_output = _fallback_processed_answer(self.prompt_set, info)
+
+            processed_output = str(processed_output).strip()
+            if not processed_output:
+                continue
+
             if processed_output in output_num:
                 output_num[processed_output] += 1
             else:
                 output_num[processed_output] = 1
+
             if output_num[processed_output] > max_output_num:
                 max_output = processed_output
                 max_output_num = output_num[processed_output]
+
         return max_output
     
-    async def _async_execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
-        """ To be overriden by the descendant class """
-        """ Use the processed input to get the result """
+    async def _async_execute(self, input:Dict[str,str], spatial_info:Dict[str,Any], temporal_info:Dict[str,Any], **kwargs):
         output_num = {}
         max_output = ""
         max_output_num = 0
+
         for info in spatial_info.values():
-            processed_output = self.prompt_set.postprocess_answer(info['output'])
+            processed_output = _packet_preferred_answer(info)
+            if not processed_output:
+                processed_output = _fallback_processed_answer(self.prompt_set, info)
+
+            processed_output = str(processed_output).strip()
+            if not processed_output:
+                continue
+
             print(processed_output)
+
             if processed_output in output_num:
                 output_num[processed_output] += 1
             else:
                 output_num[processed_output] = 1
+
             if output_num[processed_output] > max_output_num:
                 max_output = processed_output
                 max_output_num = output_num[processed_output]
+
         return max_output
