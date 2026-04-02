@@ -134,18 +134,25 @@ async def main(args: argparse.Namespace):
 
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
 
-    memory_bank = TrajectoryMemoryBank(max_size=args.memory_max_size)
-    await bootstrap_memory_bank(
-        tasks=tasks,
-        task_adapter=adapter,
-        executor=executor,
-        reward_calculator=reward_calculator,
-        memory_bank=memory_bank,
-        default_agent_names=agent_names,
-        default_node_kwargs=node_kwargs,
-        bootstrap_task_limit=args.bootstrap_task_limit,
-        keep_top_k_per_task=args.keep_top_k_per_task,
+    memory_bank = TrajectoryMemoryBank(
+        max_size=args.memory_max_size,
+        corrective_max_size=args.memory_corrective_max_size,
+        prototype_match_threshold=args.prototype_match_threshold,
+        positive_reward_threshold=args.positive_reward_threshold,
+        corrective_gap_threshold=args.corrective_gap_threshold,
+        corrective_low_reward_threshold=args.corrective_low_reward_threshold,
     )
+    # await bootstrap_memory_bank(
+    #     tasks=tasks,
+    #     task_adapter=adapter,
+    #     executor=executor,
+    #     reward_calculator=reward_calculator,
+    #     memory_bank=memory_bank,
+    #     default_agent_names=agent_names,
+    #     default_node_kwargs=node_kwargs,
+    #     bootstrap_task_limit=args.bootstrap_task_limit,
+    #     keep_top_k_per_task=args.keep_top_k_per_task,
+    # )
 
     if args.memory_bootstrap_path:
         memory_bank.load_jsonl(args.memory_bootstrap_path)
@@ -250,7 +257,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset_json", type=str, default="my_datasets/MATH/train.jsonl")
     parser.add_argument("--llm_name", type=str, default="Meta-Llama-3.1-8B-Instruct")
     parser.add_argument("--save_dir", type=str, default="results/v4_math")
-    parser.add_argument("--memory_bootstrap_path", type=str, default="")
+    parser.add_argument("--memory_bootstrap_path", type=str, default="/root/autodl-tmp/diffusion_agent/results/v4_math/memory_bootstrap.jsonl")
     parser.add_argument("--decision_method", type=str, default="FinalRefer")
     parser.add_argument("--num_rounds", type=int, default=1)
     parser.add_argument("--max_tasks", type=int, default=-1)
@@ -259,9 +266,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--node_roles", type=str, default="MathSolver,ProblemDecomposer,CalculationChecker,ProgrammingExpert")
 
     parser.add_argument("--memory_max_size", type=int, default=300)
-    parser.add_argument("--bootstrap_task_limit", type=int, default=100)
+    parser.add_argument("--bootstrap_task_limit", type=int, default=2)
     parser.add_argument("--keep_top_k_per_task", type=int, default=1)
     parser.add_argument("--top_k_memory", type=int, default=5)
+
+    parser.add_argument("--memory_corrective_max_size", type=int, default=200)
+    parser.add_argument("--prototype_match_threshold", type=float, default=0.72)
+    parser.add_argument("--positive_reward_threshold", type=float, default=0.0)
+    parser.add_argument("--corrective_gap_threshold", type=float, default=0.35)
+    parser.add_argument("--corrective_low_reward_threshold", type=float, default=0.0)
 
     parser.add_argument("--node_threshold", type=float, default=0.35)
     parser.add_argument("--edge_threshold", type=float, default=0.35)

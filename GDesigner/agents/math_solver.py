@@ -13,6 +13,7 @@ from utils.context_packets import (
     format_packet_context,
     render_role_specific_packet_context,
     format_memory_context,
+    build_execution_memory_block,
 )
 import re
 from textwrap import dedent
@@ -40,30 +41,42 @@ class MathSolver(Node):
             role=self.role,
             spatial_info=spatial_info,
             temporal_info=temporal_info,
+            execution_memory=memory_summary.get("execution_memory", {}) if isinstance(memory_summary, dict) else {},
+            
         )
         packet_context = render_role_specific_packet_context(self.role, selected_packets)
         if packet_context:
             packet_context = f"[Structured predecessor context]\n{packet_context}\n"
 
+        # 旧的先保留
         memory_packets = build_memory_packets(memory_summary, top_k=2)
         memory_context = format_memory_context(memory_packets)
 
-        route_str = (
-            f"[Route context]\n"
-            f"- step_idx: {route_context.get('step_idx', -1)}\n"
-            f"- visible_predecessors: {route_context.get('visible_predecessor_ids', [])}\n"
+        # 新增：execution_memory / routing_memory 的专用摘要
+        # route_block = build_route_context_block(
+        #     route_context,
+        #     memory_summary.get("routing_memory", {}) if isinstance(memory_summary, dict) else {},
+        # )
+        execution_memory_block = build_execution_memory_block(
+            self.role,
+            memory_summary.get("execution_memory", {}) if isinstance(memory_summary, dict) else {},
         )
 
         if packet_context:
-            user_prompt += "\n\n" + route_str + "\n" + packet_context
+            user_prompt += "\n\n"  + "\n" + packet_context
         else:
-            user_prompt += "\n\n" + route_str + "\n[Visible collaboration packets]\n- None"
+            user_prompt += "\n\n"  + "\n[Visible collaboration packets]\n- None"
 
-        if memory_context:
-            user_prompt += "\n\n" + memory_context
+        # if memory_context:
+        #     user_prompt += "\n\n" + memory_context
+        
+        if execution_memory_block:
+            user_prompt += "\n\n" + execution_memory_block
 
         user_prompt += "\n\n" + self._get_role_task_block()
         user_prompt += "\n\n" + self._get_role_output_format_block()
+
+        self._selected_packet_keys = self._collect_selected_packet_types(selected_packets)
 
         return system_prompt, user_prompt
     
@@ -236,6 +249,63 @@ class MathSolver(Node):
             """).strip()
         )
 
+    def _collect_selected_packet_types(self, selected_packets: Dict[str, List[Dict[str, Any]]]) -> List[str]:
+        packet_types = []
+        for bucket in ("spatial", "temporal"):
+            for item in selected_packets.get(bucket, []):
+                pkt = item.get("packet", {}) or {}
+                pkt_type = str(pkt.get("packet_type", "")).strip()
+                if pkt_type:
+                    packet_types.append(pkt_type)
+        # 去重但保序
+        return list(dict.fromkeys(packet_types))
+
+    def _infer_output_packet_types(self, role: str, structured: Dict[str, Any]) -> List[str]:
+        types = []
+
+        if structured.get("summary"):
+            types.append("summary")
+
+        if role == "ProblemDecomposer":
+            if structured.get("plan_steps"):
+                types.append("plan_steps")
+            if structured.get("known_facts"):
+                types.append("known_facts")
+            if structured.get("final_text"):
+                types.append("final")
+
+        elif role == "MathSolver":
+            if structured.get("derivation") or structured.get("plan_steps"):
+                types.append("key_steps")
+            if structured.get("candidate_answer"):
+                types.append("candidate_answer")
+            if structured.get("sanity_check"):
+                types.append("sanity_check")
+            if structured.get("final_text"):
+                types.append("final")
+
+        elif role == "ProgrammingExpert":
+            if structured.get("python_code"):
+                types.append("python_code")
+            if structured.get("code_result"):
+                types.append("code_result")
+            if structured.get("candidate_answer"):
+                types.append("candidate_answer")
+            if structured.get("final_text"):
+                types.append("final")
+
+        elif role == "CalculationChecker":
+            if structured.get("verdict"):
+                types.append("verdict")
+            if structured.get("errors_found"):
+                types.append("errors_found")
+            if structured.get("candidate_answer"):
+                types.append("correct_answer")
+            if structured.get("final_text"):
+                types.append("final")
+
+        return types
+
     def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
         """ To be overriden by the descendant class """
         """ Use the processed input to get the result """
@@ -246,7 +316,9 @@ class MathSolver(Node):
             answer = execute_code_get_return(response.lstrip("```python\n").rstrip("\n```"))
             response += f"\nthe answer is {answer}"
         structured = self._extract_structured_packet(response, self.role)
-        self.output_packet = build_output_packet(self.role, response, structured=structured)
+        self.output_packet = build_output_packet(self.role, response, structured=structured,
+                                                selected_packets=getattr(self, "_selected_packet_keys", []),
+                                                output_packet_types=self._infer_output_packet_types(self.role, structured))
         return response
 
     async def _async_execute(self, input:Dict[str,str],  spatial_info:Dict[str,Any], temporal_info:Dict[str,Any],**kwargs):
@@ -272,7 +344,9 @@ class MathSolver(Node):
             if not structured.get("candidate_answer"):
                 structured["candidate_answer"] = executed_code_result
 
-        self.output_packet = build_output_packet(self.role, response, structured=structured)
+        self.output_packet = build_output_packet(self.role, response, structured=structured,
+                                                selected_packets=getattr(self, "_selected_packet_keys", []),
+                                                output_packet_types=self._infer_output_packet_types(self.role, structured),)
         print(f"#################system_prompt:{system_prompt}")
         print(f"#################user_prompt:{user_prompt}")
         print(f"#################response:{response}")

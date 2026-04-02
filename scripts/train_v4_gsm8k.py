@@ -218,7 +218,14 @@ async def main():
     )
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
 
-    memory_bank = TrajectoryMemoryBank(max_size=300)
+    memory_bank = TrajectoryMemoryBank(
+        max_size=args.memory_max_size,
+        corrective_max_size=args.memory_corrective_max_size,
+        prototype_match_threshold=args.prototype_match_threshold,
+        positive_reward_threshold=args.positive_reward_threshold,
+        corrective_gap_threshold=args.corrective_gap_threshold,
+        corrective_low_reward_threshold=args.corrective_low_reward_threshold,
+    )
     await bootstrap_memory_bank(
         tasks=tasks,
         task_adapter=adapter,

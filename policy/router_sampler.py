@@ -14,10 +14,17 @@ class RouterSampler:
         node_threshold: float = 0.35,
         edge_threshold: float = 0.35,
         force_non_empty_trace: bool = True,
+        prefix_bias_scale: float = 1.25,
+        risky_edge_penalty: float = 0.80,
+        stop_bias_scale: float = 1.00,
     ):
         self.node_threshold = node_threshold
         self.edge_threshold = edge_threshold
         self.force_non_empty_trace = force_non_empty_trace
+
+        self.prefix_bias_scale = prefix_bias_scale
+        self.risky_edge_penalty = risky_edge_penalty
+        self.stop_bias_scale = stop_bias_scale
 
     def build_valid_agent_mask(
         self,
@@ -69,13 +76,28 @@ class RouterSampler:
 
         return (valid > 0).float()
 
-    def _build_distributions(self, policy_output: Dict[str, torch.Tensor], valid_agent_mask: torch.Tensor):
+    def _build_distributions(
+        self,
+        policy_output: Dict[str, torch.Tensor],
+        valid_agent_mask: torch.Tensor,
+        graph_prior: Optional[Dict] = None,
+        trace=None,
+    ):
         if valid_agent_mask.dim() == 1:
             valid_agent_mask = valid_agent_mask.unsqueeze(0)
 
-        # stop_dist = Bernoulli(logits=policy_output["stop_logit"].unsqueeze(-1))
         masked_logits = policy_output["next_agent_logits"].clone()
+
+        # prefix / risky-edge / stop-depth bias
+        if graph_prior is not None:
+            masked_logits = masked_logits + self._build_routing_bias(
+                graph_prior=graph_prior,
+                trace=trace or [],
+                valid_agent_mask=valid_agent_mask,
+            )
+
         masked_logits = masked_logits.masked_fill(valid_agent_mask <= 0, -1e9)
+
         next_agent_dist = Categorical(logits=masked_logits)
         probs = torch.softmax(masked_logits, dim=-1)
         return next_agent_dist, masked_logits, probs
@@ -85,8 +107,13 @@ class RouterSampler:
         policy_output: Dict[str, torch.Tensor],
         valid_agent_mask: torch.Tensor,
         trace,
+        graph_prior: Optional[Dict] = None,
     ) -> Dict:
-        next_agent_dist, masked_logits, probs = self._build_distributions(policy_output, valid_agent_mask)
+        next_agent_dist, masked_logits, probs = self._build_distributions(
+                                                        policy_output, 
+                                                        valid_agent_mask,
+                                                        graph_prior=graph_prior,
+                                                        trace=trace)
 
         next_agent = next_agent_dist.sample()
         picked = int(next_agent[0].item())
@@ -147,5 +174,76 @@ class RouterSampler:
             "selection_prob": probs[0, int(selected_local_idx)],
         }
     
+    def _trace_role_prefix(self, trace, agent_roles):
+        trace_indices = trace_to_local_indices(trace)
+        roles = []
+        for idx in trace_indices:
+            if 0 <= int(idx) < len(agent_roles):
+                roles.append(str(agent_roles[int(idx)]))
+        return "|".join(roles)
+
+    def _build_routing_bias(
+        self,
+        graph_prior: Optional[Dict],
+        trace,
+        valid_agent_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        if valid_agent_mask.dim() == 1:
+            valid_agent_mask = valid_agent_mask.unsqueeze(0)
+
+        bias = torch.zeros_like(valid_agent_mask, dtype=torch.float32)
+
+        if not graph_prior:
+            return bias
+
+        routing_memory = graph_prior.get("routing_memory", {}) or {}
+        agent_roles = graph_prior.get("agent_roles", []) or routing_memory.get("agent_roles", [])
+        if not routing_memory:
+            return bias
+
+        trace_indices = trace_to_local_indices(trace)
+        decision_idx = self._decision_idx(valid_agent_mask)
+
+        # 1) prefix -> next-step bias
+        if trace_indices and agent_roles:
+            prefix_key = self._trace_role_prefix(trace_indices, agent_roles)
+            next_map = (routing_memory.get("prefix_next_step_local", {}) or {}).get(prefix_key, {})
+            for dst_idx_str, score in next_map.items():
+                dst_idx = int(dst_idx_str)
+                if 0 <= dst_idx < bias.size(-1):
+                    bias[:, dst_idx] += self.prefix_bias_scale * float(score)
+
+        # 2) risky edge penalty
+        if trace_indices:
+            last_agent = int(trace_indices[-1])
+            risky_map = (routing_memory.get("risky_edges_local", {}) or {}).get(str(last_agent), {})
+            for dst_idx_str, score in risky_map.items():
+                dst_idx = int(dst_idx_str)
+                if 0 <= dst_idx < bias.size(-1):
+                    bias[:, dst_idx] -= self.risky_edge_penalty * float(score)
+
+        # 3) risky prefix penalty
+        if trace_indices and agent_roles:
+            prefix_key = self._trace_role_prefix(trace_indices, agent_roles)
+            risky_prefixes = routing_memory.get("risky_prefixes_local", {}) or {}
+            risky_count = float(risky_prefixes.get(prefix_key, 0.0))
+            if risky_count > 0:
+                # apply a global penalty to "continue" actions, keep decision node relatively safer
+                decision_idx = self._decision_idx(valid_agent_mask)
+                penalty = min(1.5, 0.15 * risky_count)
+                for j in range(bias.size(-1)):
+                    if j != decision_idx:
+                        bias[:, j] -= penalty
+
+        # 4) stop bonus when current depth reaches retrieved avg stop depth
+        avg_stop_depth = float(routing_memory.get("avg_stop_depth", 0.0) or 0.0)
+        if avg_stop_depth > 0:
+            step_now = len(trace_indices)
+            if step_now >= max(1, int(round(avg_stop_depth))):
+                bonus = (step_now - avg_stop_depth + 1.0) / max(1.0, avg_stop_depth)
+                bias[:, decision_idx] += self.stop_bias_scale * float(bonus)
+
+        return bias
+
     def _decision_idx(self, x: torch.Tensor) -> int:
         return int(x.size(-1) - 1)  # [MOD] 最后一个节点固定视为 decision node

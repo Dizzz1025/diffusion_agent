@@ -132,6 +132,57 @@ class MultiAgentGraphV3Env:
             "edge_probs": edge_probs_ext,
         }
     
+    def _build_local_routing_memory(self, routing_memory: dict, agent_pool) -> dict:
+        routing_memory = routing_memory or {}
+        if not routing_memory or not agent_pool:
+            return {
+                "agent_roles": [],
+                "prefix_next_step_local": {},
+                "risky_edges_local": {},
+                "avg_stop_depth": 0.0,
+            }
+
+        agent_roles = [
+            str(x.get("agent_role") or x.get("role") or x.get("agent_name") or f"Agent{i}")
+            for i, x in enumerate(agent_pool)
+        ]
+        role_to_idx = {role: i for i, role in enumerate(agent_roles)}
+
+        prefix_next_step_local = {}
+        for prefix_key, next_map in (routing_memory.get("prefix_next_step", {}) or {}).items():
+            local_next = {}
+            for next_role, score in (next_map or {}).items():
+                if next_role in role_to_idx:
+                    local_next[str(role_to_idx[next_role])] = float(score)
+            if local_next:
+                prefix_next_step_local[prefix_key] = local_next
+
+        risky_edges_local = {}
+        for edge in (routing_memory.get("risky_edges", []) or []):
+            src_role = edge.get("src")
+            dst_role = edge.get("dst")
+            score = float(edge.get("score", 0.0))
+            if src_role in role_to_idx and dst_role in role_to_idx:
+                src_idx = str(role_to_idx[src_role])
+                dst_idx = str(role_to_idx[dst_role])
+                risky_edges_local.setdefault(src_idx, {})[dst_idx] = score
+
+        risky_prefixes_local = {}
+        for item in (routing_memory.get("risky_prefixes", []) or []):
+            prefix = str(item.get("prefix", ""))
+            count = float(item.get("count", 0.0))
+            if prefix:
+                risky_prefixes_local[prefix] = count
+
+        return {
+            "agent_roles": agent_roles,
+            "prefix_next_step_local": prefix_next_step_local,
+            "risky_edges_local": risky_edges_local,
+            "risky_prefixes_local": risky_prefixes_local,
+            "avg_stop_depth": float(routing_memory.get("avg_stop_depth", 0.0)),
+        }
+    
+
     def reset(self) -> Dict:
         if self.task_sampling_mode == "random":
             self.current_task_idx = random.randrange(len(self.tasks))
@@ -181,6 +232,14 @@ class MultiAgentGraphV3Env:
             self.current_execution_graph_prior
         )
 
+        local_routing_memory = self._build_local_routing_memory(
+            routing_memory=self.current_summary.get("routing_memory", {}) or {},
+            agent_pool=self.current_agent_pool,
+        )
+
+        self.current_graph_prior["routing_memory"] = local_routing_memory
+        self.current_graph_prior["agent_roles"] = local_routing_memory.get("agent_roles", [])
+
         return {
             "task": self.current_task,
             "task_id": self.current_task_idx,
@@ -210,6 +269,13 @@ class MultiAgentGraphV3Env:
         local_trace = trace_to_local_indices(trace)
         route_stats = {"steps": len(local_trace), "deadloops": count_deadloops(trace, ngram=2)}
         reward = self.reward_calculator.compute(result, route_stats)
+        task_family = str(
+            self.current_task.get("task_family")
+            or self.current_task.get("task_type")
+            or "generic"
+        )
+        agent_set_id = "|".join([str(x) for x in self.current_agent_names])
+
         info = {
             "result": result,
             "support_graph": trace_to_graph_spec(trace, num_agents=self.num_agents),
@@ -217,11 +283,14 @@ class MultiAgentGraphV3Env:
             "execution_graph": result.get("graph", {}),
             "task_embedding": self.current_task_embedding,
             "task_text": self.current_task["task_text"],
+            "task_family": task_family,
+            "agent_set_id": agent_set_id,
             "trace": trace,
             "selected_trace": local_trace,
             "route_stats": route_stats,
             "agent_pool": self.current_agent_pool,
             "agent_names": self.current_agent_names,
             "node_kwargs": self.current_node_kwargs,
+            "memory_summary": self.current_summary,
         }
         return reward, info

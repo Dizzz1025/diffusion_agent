@@ -88,7 +88,7 @@ class RouterPPOTrainer:
             )
             policy_output = self.router_policy(state_repr, candidate_embeddings=candidate_embeddings)
             valid_mask = self.router_sampler.build_valid_agent_mask(graph_prior, last_agent, trace)
-            action = self.router_sampler.sample(policy_output, valid_mask, trace)
+            action = self.router_sampler.sample(policy_output, valid_mask, trace, graph_prior)
 
             transitions.append(
                 PPORouterTransition(
@@ -162,9 +162,12 @@ class RouterPPOTrainer:
 
         reward, info = await self.env.execute_trace(trace)
         returns, advantages = self._compute_returns_and_advantages(transitions, float(reward), normalize_advantage=False)
+        predicted_reward = float(transitions[0].old_value) if len(transitions) > 0 else 0.0
+        
         return {
             "trace": trace,
             "reward": reward,
+            "predicted_reward": predicted_reward,
             "info": info,
             "transitions": transitions,
             "returns": returns,
@@ -298,7 +301,7 @@ class RouterPPOTrainer:
         episode = await self.rollout_trace(state)
         ppo_stats = self.ppo_update(episode["transitions"], episode["returns"], episode["advantages"])
 
-        self.update_memory(episode["info"], episode["reward"])
+        self.update_memory(episode)
         result = episode["info"]["result"]
         route_stats = episode["info"]["route_stats"]
         return {
@@ -327,7 +330,7 @@ class RouterPPOTrainer:
 
         # memory 还是按 episode 写回
         for ep in episodes:
-            self.update_memory(ep["info"], ep["reward"])
+            self.update_memory(ep)
 
         rewards = [float(ep["reward"]) for ep in episodes]
         corrects = [int(ep["info"]["result"]["correct"]) for ep in episodes]
@@ -346,28 +349,57 @@ class RouterPPOTrainer:
             **ppo_stats,
         }
     
-    def update_memory(self, info: Dict, reward: float) -> None:
+    def update_memory(self, episode: Dict) -> None:
+        info = episode["info"]
         result = info["result"]
         trace = info["trace"]
-        if reward < self.add_memory_reward_threshold and int(result["correct"]) == 0:
-            return
+
+        actual_reward = float(episode["reward"])
+        predicted_reward = float(episode.get("predicted_reward", 0.0))
+
+        step_details = []
+        executed_steps = (
+            info.get("execution_graph", {}).get("execution_records", [])
+            or info.get("result", {}).get("graph", {}).get("execution_records", [])
+            or []
+        )
+        for i, step in enumerate(executed_steps):
+            if not isinstance(step, dict):
+                continue
+            step_details.append(
+                {
+                    "t": int(step.get("t", i)),
+                    "role": str(step.get("agent_role") or step.get("role") or step.get("agent_name") or ""),
+                    "agent": str(step.get("agent_name") or step.get("role") or ""),
+                    "selected_packets": list(step.get("selected_packets", []) or []),
+                    "output_packet_types": list(step.get("output_packet_types", []) or []),
+                }
+            )
 
         item = {
             "task_embedding": info["task_embedding"],
             "task_text": info["task_text"],
+            "task_family": info.get("task_family", "generic"),
+            "agent_set_id": info.get("agent_set_id", "default"),
             "agent_pool": info["agent_pool"],
             "trace": trace,
             "selected_trace": info["selected_trace"],
             "support_graph": info["support_graph"],
             "support_edges_semantic": info.get("support_edges_semantic", []),
             "execution_graph": info.get("execution_graph", {}),
-            "reward": float(reward),
+            "route_stats": info.get("route_stats", {}),
+            "reward": actual_reward,
+            "actual_reward": actual_reward,
+            "predicted_reward": predicted_reward,
             "correct": int(result["correct"]),
             "token_cost": float(result["total_tokens"]),
             "steps": int(len(info["selected_trace"])),
             "num_agents": len(info["agent_pool"]),
+            "steps_detail": step_details
         }
-        self.memory_bank.add(item)
+
+        decision = self.memory_bank.add(item)
+        info["memory_writeback"] = decision
 
     def _merge_episode_batch(self, episodes: List[Dict]):
         all_transitions: List[PPORouterTransition] = []

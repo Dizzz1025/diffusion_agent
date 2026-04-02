@@ -57,15 +57,15 @@ ROLE_PACKET_SCHEMA = {
     },
     "MathSolver": {
         "public_fields": ["summary", "known_facts", "plan_steps", "candidate_answer", "final_text"],
-        "extra_fields": ["used_packets", "key_steps"],
+        "extra_fields": ["used_packets", "derivation", "sanity_check", "low_confidence"],
     },
     "ProgrammingExpert": {
         "public_fields": ["summary", "known_facts", "candidate_answer", "code_result", "final_text"],
-        "extra_fields": ["formulation", "code"],
+        "extra_fields": ["formulation", "python_code"],
     },
     "CalculationChecker": {
         "public_fields": ["summary", "known_facts", "plan_steps", "candidate_answer", "verdict", "errors_found", "final_text"],
-        "extra_fields": ["target_answer", "check_steps", "correct_answer"],
+        "extra_fields": ["target_answer", "recomputation", "correct_answer"],
     },
     "default": {
         "public_fields": ["summary", "known_facts", "plan_steps", "candidate_answer", "final_text"],
@@ -112,9 +112,17 @@ def infer_packet_type(role: str) -> str:
     return mapping.get(role, "generic")
 
 
-def build_output_packet(role: str, text: str, structured: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_output_packet(
+    role: str,
+    text: str,
+    structured: Optional[Dict[str, Any]] = None,
+    selected_packets: Optional[List[str]] = None,
+    output_packet_types: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     packet_type = infer_packet_type(role)
     structured = structured or {}
+    selected_packets = selected_packets or []
+    output_packet_types = output_packet_types or []
 
     schema = ROLE_PACKET_SCHEMA.get(role, ROLE_PACKET_SCHEMA["default"])
 
@@ -141,7 +149,15 @@ def build_output_packet(role: str, text: str, structured: Optional[Dict[str, Any
         if value not in (None, "", [], {}):
             packet[field] = value
 
-    # 3) 兼容旧逻辑
+    # 3) 新增：记录本轮用了哪些上游 packet 类型
+    if selected_packets:
+        packet["selected_packets"] = list(dict.fromkeys([str(x) for x in selected_packets if x]))
+
+    # 4) 新增：记录本轮产出了哪些输出证据类型
+    if output_packet_types:
+        packet["output_packet_types"] = list(dict.fromkeys([str(x) for x in output_packet_types if x]))
+
+    # 5) 兼容旧逻辑
     if packet_type == "program" and not packet.get("code"):
         code = extract_code_block(text)
         if code:
@@ -165,11 +181,34 @@ def _match_packet_types(packet: Optional[Dict[str, Any]], allowed: List[str]) ->
         return False
     return packet.get("packet_type") in allowed
 
+def _rerank_packets_with_prior(
+    selected_items: List[Dict[str, Any]],
+    role: str,
+    execution_memory=None,
+) -> List[Dict[str, Any]]:
+    execution_memory = execution_memory or {}
+    role_packet_priors = execution_memory.get("role_packet_priors", {}) or {}
+    pkt_prior = role_packet_priors.get(role, {}) or {}
+
+    def _packet_score(item):
+        packet = item.get("packet", {}) or {}
+        pkt_type = str(packet.get("packet_type", ""))
+
+        # 如果 packet 本身带有 score，就用它；没有就给一个默认值
+        base = float(packet.get("score", 1.0)) if isinstance(packet, dict) else 1.0
+
+        # memory 里记录的是 “这个 role 更偏好哪些 packet_type”
+        prior = float(pkt_prior.get(pkt_type, 0.0))
+
+        return base + 0.75 * prior
+
+    return sorted(selected_items, key=_packet_score, reverse=True)
 
 def select_context_packets(
     role: str,
     spatial_info: Dict[str, Dict[str, Any]],
     temporal_info: Dict[str, Dict[str, Any]],
+    execution_memory=None
 ) -> Dict[str, List[Dict[str, Any]]]:
     policy = ROLE_PACKET_POLICY.get(
         role,
@@ -196,11 +235,22 @@ def select_context_packets(
                 "packet": packet,
             })
 
+    # 关键新增：规则筛完以后，再按 memory prior 软重排
+    selected_spatial = _rerank_packets_with_prior(
+        selected_spatial,
+        role=role,
+        execution_memory=execution_memory,
+    )
+    selected_temporal = _rerank_packets_with_prior(
+        selected_temporal,
+        role=role,
+        execution_memory=execution_memory,
+    )
+
     return {
         "spatial": selected_spatial,
         "temporal": selected_temporal,
     }
-
 
 def build_memory_packets(memory_summary: Optional[Dict[str, Any]], top_k: int = 2) -> List[Dict[str, Any]]:
     if not memory_summary:
@@ -334,4 +384,72 @@ def format_memory_context(memory_packets: List[Dict[str, Any]]) -> str:
             f"- memory#{i}: trace={item['trace']}, correct={item['correct']}, "
             f"reward={item['reward']:.3f}, task={item['task_text']}"
         )
+    return "\n".join(lines)
+
+def _extract_answer_hint(self, text: str) -> str:
+    patterns = [
+        r"####\s*Answer:\s*([^\n]+)",
+        r"[Tt]he answer is\s*([^\n\.]+)",
+        r"[Ff]inal answer[:：]\s*([^\n]+)",
+        r"[Cc]andidate[_ ]?[Aa]nswer[:：]?\s*([^\n]+)",
+    ]
+    for p in patterns:
+        m = re.search(p, text)
+        if m:
+            return m.group(1).strip()
+    return ""
+
+def _top_items(d: Dict[str, Any], k: int = 3):
+    if not isinstance(d, dict):
+        return []
+    items = []
+    for key, val in d.items():
+        try:
+            score = float(val)
+        except Exception:
+            continue
+        items.append((key, score))
+    items.sort(key=lambda x: x[1], reverse=True)
+    return items[:k]
+
+
+def build_execution_memory_block(role: str, execution_memory: Dict[str, Any]) -> str:
+    if not execution_memory:
+        return ""
+
+    role_hints = (execution_memory.get("role_hints", {}) or {}).get(role, {}) or {}
+    packet_priors = (execution_memory.get("role_packet_priors", {}) or {}).get(role, {}) or {}
+    output_priors = (execution_memory.get("role_output_packet_priors", {}) or {}).get(role, {}) or {}
+
+    times_seen = int(role_hints.get("times_seen", 0) or 0)
+    if times_seen < 3:
+        return ""
+
+    lines = [f"[Execution memory for {role}]"]
+
+    avg_position = role_hints.get("avg_position", None)
+    if avg_position is not None:
+        try:
+            lines.append(
+                f"In similar successful traces, this role usually appears around step {float(avg_position):.1f}."
+            )
+        except Exception:
+            pass
+
+    prev_roles = [name for name, _ in _top_items(role_hints.get("common_prev_roles", {}), k=2)]
+    next_roles = [name for name, _ in _top_items(role_hints.get("common_next_roles", {}), k=2)]
+    input_types = [name for name, _ in _top_items(packet_priors, k=3)]
+    output_types = [name for name, _ in _top_items(output_priors, k=3)]
+
+    if prev_roles:
+        lines.append("This role usually follows: " + ", ".join(prev_roles) + ".")
+    if next_roles:
+        lines.append("Its outputs are often passed to: " + ", ".join(next_roles) + ".")
+    if input_types:
+        lines.append("Prioritize input packet types: " + ", ".join(input_types) + ".")
+    if output_types:
+        lines.append("Typical output packet types: " + ", ".join(output_types) + ".")
+
+    lines.append("Use these as soft hints only; follow the current task and visible context first.")
+
     return "\n".join(lines)
