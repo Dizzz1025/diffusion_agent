@@ -248,7 +248,9 @@ async def main(args: argparse.Namespace):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_json", type=str, default="my_datasets/MATH/train.jsonl")
-    parser.add_argument("--llm_name", type=str, default="Meta-Llama-3.1-8B-Instruct")
+    # parser.add_argument("--llm_name", type=str, default="Meta-Llama-3.1-8B-Instruct")
+    parser.add_argument("--llm_name", type=str, default="/home/zhangdi24/Qwen2.5-7B-Instruct")
+    # parser.add_argument("--llm_name", type=str, default="/home/zhangdi24/Llama3-8B-Instruct")
     parser.add_argument("--save_dir", type=str, default="results/v4_math")
     parser.add_argument("--memory_bootstrap_path", type=str, default="")
     parser.add_argument("--decision_method", type=str, default="FinalRefer")
@@ -259,8 +261,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--node_roles", type=str, default="MathSolver,ProblemDecomposer,CalculationChecker,ProgrammingExpert")
 
     parser.add_argument("--memory_max_size", type=int, default=300)
-    parser.add_argument("--bootstrap_task_limit", type=int, default=100)
-    parser.add_argument("--keep_top_k_per_task", type=int, default=1)
+    parser.add_argument("--bootstrap_task_limit", type=int, default=10)
+    parser.add_argument("--keep_top_k_per_task", type=int, default=2)
     parser.add_argument("--top_k_memory", type=int, default=5)
 
     parser.add_argument("--node_threshold", type=float, default=0.35)

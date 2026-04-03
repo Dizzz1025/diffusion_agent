@@ -159,8 +159,8 @@ async def train_graph_generator_from_memory(
 
 async def main():
     dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
-    llm_name = 'Meta-Llama-3.1-8B-Instruct'
+    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
+    # llm_name = 'Meta-Llama-3.1-8B-Instruct'
     domain = "gsm8k"
     decision_method = "FinalRefer"
     num_rounds = 1
@@ -173,7 +173,7 @@ async def main():
         {"role": "ProgrammingExpert"},
     ]
 
-    save_dir = Path("results/v6")
+    save_dir = Path("results/v4_1gsm8k")
     ckpt_dir = save_dir / "checkpoints"
     save_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -230,9 +230,9 @@ async def main():
         bootstrap_task_limit=100,
         keep_top_k_per_task=2,
     )
-    memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
+    # memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
     # memory_bank.load_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
-    # memory_bank.load_jsonl("/home/zhangdi24/diffusion_agent/results/v3/memory_bootstrap.jsonl")
+    memory_bank.load_jsonl("/home/zhangdi24/diffusion_agent/results/v3/memory_bootstrap.jsonl")
 
     task_dim = len(memory_bank.items[0]["task_embedding"]) if len(memory_bank) > 0 else 384
     # graph_generator = GraphGenerator(

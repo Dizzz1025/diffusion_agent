@@ -19,49 +19,76 @@ BASE_URL = ''
 load_dotenv()
 print(os.getenv("BASE_URL"))
 print(os.getenv("API_KEY"))
-# Prefer custom names, fallback to standard OpenAI env names
+
 _RAW_BASE_URL = os.getenv('BASE_URL') or os.getenv('OPENAI_API_BASE')
 _RAW_API_KEY = os.getenv('API_KEY') or os.getenv('OPENAI_API_KEY')
 
 
-def _build_chat_endpoint(base_url: Optional[str]) -> str:
-    """Return a normalized chat completions endpoint.
-    - If base_url already contains '/chat/completions', return it.
-    - If base_url is like '.../v1', append '/chat/completions'.
-    - If base_url is None/empty, use the default OpenAI endpoint.
-    """
-    default = 'https://api.openai.com/v1/chat/completions'
+def _build_completion_endpoint(base_url: Optional[str]) -> str:
+    default = 'https://api.openai.com/v1/completions'
     if not base_url:
         return default
     base_url = base_url.rstrip('/')
-    if base_url.endswith('/chat/completions'):
+    if base_url.endswith('/completions'):
         return base_url
-    # Common cases: 'https://api.openai.com/v1' or provider-compatible base
-    return f"{base_url}/chat/completions"
+    if base_url.endswith('/chat/completions'):
+        return base_url[:-len('/chat/completions')] + '/completions'
+    return f"{base_url}/completions"
 
 
-# MINE_BASE_URL = _build_chat_endpoint(_RAW_BASE_URL)
+# MINE_BASE_URL = _build_completion_endpoint(_RAW_BASE_URL)
 # MINE_API_KEYS = _RAW_API_KEY
-MINE_BASE_URL = "http://127.0.0.1:8000/v1/chat/completions"
+MINE_BASE_URL = "http://127.0.0.1:8000/v1/completions"
 MINE_API_KEYS = "EMPTY"
 
 
+def _messages_to_prompt(messages: List[Message]) -> str:
+    parts = []
+    for m in messages:
+        text = (m.content or "").strip()
+        if not text:
+            continue
+
+        # base model 下尽量少加 role 标记，避免把它带偏
+        if m.role == "system":
+            parts.append(text)
+        elif m.role == "user":
+            parts.append(text)
+        elif m.role == "assistant":
+            parts.append(text)
+        else:
+            parts.append(text)
+
+    prompt = "\n\n".join(parts).strip()
+    return prompt
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=60))
-async def achat(model_name:str, messages:list):
+async def acompletion(
+    model_name: str,
+    prompt: str,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+):
     request_url = MINE_BASE_URL
     authorization_key = MINE_API_KEYS
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {authorization_key}'
     }
+
     data = {
         "model": model_name,
-        "messages": [m.to_dict() for m in messages],
+        "prompt": prompt,
         "stream": False,
     }
+    if max_tokens is not None:
+        data["max_tokens"] = max_tokens
+    if temperature is not None:
+        data["temperature"] = temperature
+
     async with aiohttp.ClientSession() as session:
-        async with session.post(request_url, headers=headers ,json=data) as response:
-            # If provider returns HTML (e.g., 404 page), raise a clearer error
+        async with session.post(request_url, headers=headers, json=data) as response:
             if 'application/json' not in (response.headers.get('Content-Type') or ''):
                 text = await response.text()
                 raise aiohttp.ContentTypeError(
@@ -69,14 +96,14 @@ async def achat(model_name:str, messages:list):
                     history=response.history,
                     message=f"Unexpected content-type: {response.headers.get('Content-Type')} at {request_url}. Body preview: {text[:200]}"
                 )
+
             response_data = await response.json()
             if 'choices' not in response_data:
                 error_message = response_data.get('error', {}).get('message', 'Unknown error')
                 raise Exception(f"OpenAI API Error: {error_message}")
-            # prompt = "".join([item.content for item in messages])
-            # completion = response_data['choices'][0]['message']['content']
-            # cost_count(prompt, completion, model_name)
-            completion = response_data['choices'][0]['message']['content']
+
+            completion = response_data['choices'][0]['text']
+
             usage = response_data.get("usage", {})
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
@@ -86,8 +113,8 @@ async def achat(model_name:str, messages:list):
                 PromptTokens.instance().value += prompt_tokens
                 CompletionTokens.instance().value += completion_tokens
             else:
-                prompt = "".join([item.content for item in messages])
                 cost_count(prompt, completion, model_name)
+
             return completion
 
 
@@ -112,7 +139,6 @@ async def achat(model_name:str, messages:list):
 @LLMRegistry.register("/home/zhangdi24/Qwen2.5-7B-Instruct")
 @LLMRegistry.register("Meta-Llama-3.1-8B-Instruct")
 @LLMRegistry.register("/home/zhangdi24/llama3-8b")
-@LLMRegistry.register("/home/zhangdi24/Llama3-8B-Instruct")
 class GPTChat(LLM):
 
     def __init__(self, model_name: str, temperature: float = 0.7, top_p: float = 1.0, max_tokens: int = 1024):
@@ -124,7 +150,7 @@ class GPTChat(LLM):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         num_comps: Optional[int] = None,
-        ) -> Union[List[str], str]:
+    ) -> Union[List[str], str]:
 
         if max_tokens is None:
             max_tokens = self.DEFAULT_MAX_TOKENS
@@ -132,14 +158,20 @@ class GPTChat(LLM):
             temperature = self.DEFAULT_TEMPERATURE
         if num_comps is None:
             num_comps = self.DEFUALT_NUM_COMPLETIONS
-        
+
         if isinstance(messages, str):
             messages = [Message(role="user", content=messages)]
         elif isinstance(messages, list) and all(isinstance(m, dict) for m in messages):
             messages = [Message(role=m['role'], content=m['content']) for m in messages]
-            
-        return await achat(self.model_name,messages)
-    
+
+        prompt = _messages_to_prompt(messages)
+        return await acompletion(
+            self.model_name,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
     def gen(
         self,
         messages: List[Message],

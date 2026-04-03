@@ -12,6 +12,14 @@ from GDesigner.llm.gpt_chat import GPTChat
 from GDesigner.utils.globals import CompletionTokens, Cost, PromptTokens
 from tasks.gsm8k_adapter import GSM8KAdapter
 
+import os
+import re
+
+import debugpy
+debugpy.listen(("0.0.0.0", 5678))
+print("Waiting for debugger attach on port 5678...")
+debugpy.wait_for_client()
+print("Debugger attached.")
 
 def snapshot_counters() -> Tuple[float, int, int]:
     return (
@@ -43,7 +51,7 @@ def build_vanilla_messages(task_text: str) -> List[Dict[str, str]]:
     system_prompt = "You are a helpful assistant."
     user_prompt = (
         f"{task_text}\n\n"
-        "Solve the problem and output only the final numerical answer."
+        "Solve step by step, then give the final answer."
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -158,15 +166,17 @@ def parse_args() -> argparse.Namespace:
         "--llm_name",
         type=str,
         # default="Meta-Llama-3.1-8B-Instruct",
-        default = "/home/zhangdi24/Qwen2.5-7B-Instruct",
+        # default = "/home/zhangdi24/Qwen2.5-7B-Instruct",
+        default = "/home/zhangdi24/llama3-8b",
         help="Model name passed to your OpenAI-compatible backend.",
     )
     parser.add_argument(
         "--output_path",
         type=str,
-        default="results/vanilla_gsm8k.json",
+        default=None,
         help="Where to save evaluation results.",
     )
+
     parser.add_argument(
         "--max_samples",
         type=int,
@@ -179,7 +189,14 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="Print progress every N samples.",
     )
-    return parser.parse_args()
+
+    args = parser.parse_args()
+    if args.output_path is None:
+        model_name = os.path.basename(args.llm_name.rstrip("/"))
+        safe_model_name = re.sub(r'[^a-zA-Z0-9._-]', '_', model_name)
+        args.output_path = f"results/vanilla_gsm8k_{safe_model_name}.json"
+
+    return args
 
 
 if __name__ == "__main__":
