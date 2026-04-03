@@ -17,6 +17,7 @@ class RouterSampler:
         prefix_bias_scale: float = 1.25,
         risky_edge_penalty: float = 0.80,
         stop_bias_scale: float = 1.00,
+        enable_routing_bias: bool = False
     ):
         self.node_threshold = node_threshold
         self.edge_threshold = edge_threshold
@@ -25,6 +26,8 @@ class RouterSampler:
         self.prefix_bias_scale = prefix_bias_scale
         self.risky_edge_penalty = risky_edge_penalty
         self.stop_bias_scale = stop_bias_scale
+
+        self.enable_routing_bias = enable_routing_bias
 
     def build_valid_agent_mask(
         self,
@@ -89,7 +92,7 @@ class RouterSampler:
         masked_logits = policy_output["next_agent_logits"].clone()
 
         # prefix / risky-edge / stop-depth bias
-        if graph_prior is not None:
+        if graph_prior is not None and self.enable_routing_bias:
             masked_logits = masked_logits + self._build_routing_bias(
                 graph_prior=graph_prior,
                 trace=trace or [],

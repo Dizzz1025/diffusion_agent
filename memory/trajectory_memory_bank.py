@@ -706,15 +706,14 @@ class TrajectoryMemoryBank:
                     node_prior[role_to_idx[role]] += w
 
             pos_map = dict(proto.get("edge_weight_pos") or {})
-            neg_map = dict(proto.get("edge_weight_neg") or {})
-            all_keys = set(pos_map.keys()) | set(neg_map.keys())
-            for k in all_keys:
+            # neg_map = dict(proto.get("edge_weight_neg") or {})
+            for k, raw_score in pos_map.items():
                 src_role, dst_role = self._decode_edge_key(k)
                 if src_role not in role_to_idx or dst_role not in role_to_idx:
                     continue
                 src_idx = role_to_idx[src_role]
                 dst_idx = role_to_idx[dst_role]
-                score = self._safe_float(pos_map.get(k, 0.0)) - self.negative_edge_penalty * self._safe_float(neg_map.get(k, 0.0))
+                score = self._safe_float(raw_score, 0.0)
                 edge_prior[src_idx][dst_idx] += w * max(0.0, score)
 
         if total_w <= 0:
@@ -922,7 +921,6 @@ class TrajectoryMemoryBank:
             node_score = (
                 float(positive_summary["node_prior"][i])
                 + 0.25 * float(proto_summary["node_prior"][i])
-                - self.negative_edge_penalty * float(corrective_summary["node_prior"][i])
             )
             node_prior.append(min(1.0, max(0.0, node_score)))
 
@@ -932,7 +930,6 @@ class TrajectoryMemoryBank:
                 edge_score = (
                     float(positive_summary["edge_prior"][i][j])
                     + 0.25 * float(proto_summary["edge_prior"][i][j])
-                    - self.negative_edge_penalty * float(corrective_summary["edge_prior"][i][j])
                 )
                 row.append(min(1.0, max(0.0, edge_score)))
             edge_prior.append(row)

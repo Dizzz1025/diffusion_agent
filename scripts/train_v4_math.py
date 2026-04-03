@@ -24,6 +24,8 @@ from utils.v3_trace_utils import (
 )
 
 from GDesigner.llm.profile_embedding import get_sentence_embedding
+import os
+
 import debugpy
 
 debugpy.listen(("0.0.0.0", 5678))
@@ -52,6 +54,7 @@ async def bootstrap_memory_bank(
     default_node_kwargs,
     bootstrap_task_limit: int = 30,
     keep_top_k_per_task: int = 2,
+    save_path: str = None
 ):
     print("[V3-MATH] bootstrap memory bank from candidate traces.")
     num_agents = len(default_agent_names)
@@ -73,7 +76,7 @@ async def bootstrap_memory_bank(
             reward = reward_calculator.compute(result, {"steps": len(trace_indices), "deadloops": 0})
             scored.append(
                 {
-                    "task_embedding": task_embedding,
+                    # "task_embedding": task_embedding,
                     "task_text": task["task_text"],
                     "agent_pool": agent_pool,
                     "trace": trace,
@@ -89,7 +92,16 @@ async def bootstrap_memory_bank(
             )
 
         scored.sort(key=lambda x: (x["correct"], x["reward"]), reverse=True)
-        memory_bank.add_many(scored[:keep_top_k_per_task])
+        top_items = scored[:keep_top_k_per_task]
+        memory_bank.add_many(top_items)
+        # 再立刻 append 到磁盘
+        if save_path is not None:
+            with open(save_path, "a", encoding="utf-8") as f:
+                for item in top_items:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+
 
 
 async def main(args: argparse.Namespace):
@@ -142,22 +154,24 @@ async def main(args: argparse.Namespace):
         corrective_gap_threshold=args.corrective_gap_threshold,
         corrective_low_reward_threshold=args.corrective_low_reward_threshold,
     )
-    # await bootstrap_memory_bank(
-    #     tasks=tasks,
-    #     task_adapter=adapter,
-    #     executor=executor,
-    #     reward_calculator=reward_calculator,
-    #     memory_bank=memory_bank,
-    #     default_agent_names=agent_names,
-    #     default_node_kwargs=node_kwargs,
-    #     bootstrap_task_limit=args.bootstrap_task_limit,
-    #     keep_top_k_per_task=args.keep_top_k_per_task,
-    # )
+    memory_path = str(save_dir / "memory_bootstrap.jsonl")
+    await bootstrap_memory_bank(
+        tasks=tasks,
+        task_adapter=adapter,
+        executor=executor,
+        reward_calculator=reward_calculator,
+        memory_bank=memory_bank,
+        default_agent_names=agent_names,
+        default_node_kwargs=node_kwargs,
+        bootstrap_task_limit=args.bootstrap_task_limit,
+        keep_top_k_per_task=args.keep_top_k_per_task,
+        save_path=memory_path
+    )
 
-    if args.memory_bootstrap_path:
-        memory_bank.load_jsonl(args.memory_bootstrap_path)
-    else:
-        memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
+    # if args.memory_bootstrap_path:
+    #     memory_bank.load_jsonl(args.memory_bootstrap_path)
+    # else:
+    #     memory_bank.export_jsonl(str(save_dir / "memory_bootstrap.jsonl"))
 
     task_dim = len(memory_bank.items[0]["task_embedding"]) if len(memory_bank) > 0 else 384
 
@@ -254,9 +268,10 @@ async def main(args: argparse.Namespace):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_json", type=str, default="my_datasets/MATH/train.jsonl")
+    parser.add_argument("--dataset_json", type=str, default="my_datasets/MATH/wrong.jsonl")
     parser.add_argument("--llm_name", type=str, default="Meta-Llama-3.1-8B-Instruct")
     parser.add_argument("--save_dir", type=str, default="results/v4_math")
+    # parser.add_argument("--memory_bootstrap_path", type=str, default="/root/autodl-tmp/diffusion_agent/results/v4_math/memory_bootstrap.jsonl")
     parser.add_argument("--memory_bootstrap_path", type=str, default="/root/autodl-tmp/diffusion_agent/results/v4_math/memory_bootstrap.jsonl")
     parser.add_argument("--decision_method", type=str, default="FinalRefer")
     parser.add_argument("--num_rounds", type=int, default=1)
@@ -266,8 +281,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--node_roles", type=str, default="MathSolver,ProblemDecomposer,CalculationChecker,ProgrammingExpert")
 
     parser.add_argument("--memory_max_size", type=int, default=300)
-    parser.add_argument("--bootstrap_task_limit", type=int, default=2)
-    parser.add_argument("--keep_top_k_per_task", type=int, default=1)
+    parser.add_argument("--bootstrap_task_limit", type=int, default=100)
+    parser.add_argument("--keep_top_k_per_task", type=int, default=2)
     parser.add_argument("--top_k_memory", type=int, default=5)
 
     parser.add_argument("--memory_corrective_max_size", type=int, default=200)
