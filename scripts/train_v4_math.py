@@ -269,7 +269,9 @@ async def main(args: argparse.Namespace):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_json", type=str, default="my_datasets/MATH/wrong.jsonl")
-    parser.add_argument("--llm_name", type=str, default="Meta-Llama-3.1-8B-Instruct")
+    parser.add_argument("--llm_name", type=str, default="/home/zhangdi24/Qwen2.5-7B-Instruct")
+    # parser.add_argument("--llm_name", type=str, default="Meta-Llama-3.1-8B-Instruct")
+    # parser.add_argument("--llm_name", type=str, default="/home/zhangdi24/Llama3-8B-Instruct")
     parser.add_argument("--save_dir", type=str, default="results/v4_math")
     # parser.add_argument("--memory_bootstrap_path", type=str, default="/root/autodl-tmp/diffusion_agent/results/v4_math/memory_bootstrap.jsonl")
     parser.add_argument("--memory_bootstrap_path", type=str, default="/root/autodl-tmp/diffusion_agent/results/v4_math/memory_bootstrap.jsonl")

@@ -111,6 +111,7 @@ async def achat(model_name:str, messages:list):
 @LLMRegistry.register("gpt-4")
 @LLMRegistry.register("/home/zhangdi24/Qwen2.5-7B-Instruct")
 @LLMRegistry.register("Meta-Llama-3.1-8B-Instruct")
+@LLMRegistry.register("/home/zhangdi24/Llama3-8B-Instruct")
 class GPTChat(LLM):
 
     def __init__(self, model_name: str, temperature: float = 0.7, top_p: float = 1.0, max_tokens: int = 1024):

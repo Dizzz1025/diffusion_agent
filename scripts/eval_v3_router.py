@@ -16,6 +16,7 @@ from policy.router_sampler import RouterSampler
 from tasks.gsm8k_adapter import GSM8KAdapter
 from utils.v3_trace_utils import build_trace_step, trace_to_local_indices
 from GDesigner.llm.profile_embedding import get_sentence_embedding
+import argparse
 
 import debugpy
 debugpy.listen(("0.0.0.0", 5678))
@@ -163,27 +164,22 @@ async def rollout_trace_greedy(
     }
 
 
-async def evaluate():
+async def evaluate(args):
     # ===== 这里按你的实际路径改 =====
-    dataset_json = "my_datasets/gsm8k/gsm8k_test.jsonl"
-    # llm_name = "Meta-Llama-3.1-8B-Instruct"
-    llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
-    domain = "gsm8k"
-    decision_method = "FinalRefer"
-    num_rounds = 1
+    dataset_json = args.dataset_json
+    llm_name = args.llm_name
+    domain = args.domain
+    decision_method = args.decision_method
+    num_rounds = args.num_rounds
 
-    agent_names = ["MathSolver", "MathSolver", "MathSolver", "MathSolver"]
-    node_kwargs = [
-        {"role": "MathSolver"},
-        {"role": "ProblemDecomposer"},
-        {"role": "CalculationChecker"},
-        {"role": "ProgrammingExpert"},
-    ]
+    agent_names = [x.strip() for x in args.agent_names.split(",")]
+    node_roles = [x.strip() for x in args.node_roles.split(",")]
+    node_kwargs = [{"role": r} for r in node_roles]
 
-    save_dir = Path("results/v6")
-    ckpt_path = save_dir / "checkpoints" / "router_best.pt"
-    memory_path = Path("results/v3") / "memory_bootstrap.jsonl"
-    output_path = save_dir / "eval_router_greedy.json"
+    save_dir = Path(args.save_dir)
+    ckpt_path = Path(args.ckpt_path)
+    memory_path = Path(args.memory_path)
+    output_path = Path(args.output_path)
 
     adapter = GSM8KAdapter()
     tasks = adapter.load_tasks(dataset_json)
@@ -201,16 +197,16 @@ async def evaluate():
     )
 
     reward_calculator = V3RewardCalculator(
-        alpha_correctness=1.0,
-        beta_tokens=0.0002,
-        gamma_steps=0.03,
-        delta_deadloop=0.20,
+        alpha_correctness=args.alpha_correctness,
+        beta_tokens=args.beta_tokens,
+        gamma_steps=args.gamma_steps,
+        delta_deadloop=args.delta_deadloop,
     )
 
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
 
     # 直接加载已有 memory
-    memory_bank = TrajectoryMemoryBank(max_size=300)
+    memory_bank = TrajectoryMemoryBank(max_size=args.memory_max_size)
     memory_bank.load_jsonl(str(memory_path))
     if len(memory_bank) == 0:
         raise ValueError(f"memory bank is empty: {memory_path}")
@@ -226,7 +222,7 @@ async def evaluate():
         memory_bank=memory_bank,
         graph_generator=None,
         agent_profile_embeddings=agent_profile_embeddings,
-        top_k_memory=5,
+        top_k_memory=args.top_k_memory,
         node_threshold=router_sampler.node_threshold,
         edge_threshold=router_sampler.edge_threshold,
     )
@@ -263,7 +259,7 @@ async def evaluate():
             router_policy=router_policy,
             router_sampler=router_sampler,
             state=state,
-            max_steps=5,
+            max_steps=args.max_steps,
         )
 
         result = episode["info"]["result"]
@@ -297,30 +293,61 @@ async def evaluate():
                 f"avg_steps={total_steps / max(1, len(records)):.2f}"
             )
 
-    summary = {
-        "num_samples": len(records),
-        "accuracy": total_correct / max(1, len(records)),
-        "avg_reward": total_reward / max(1, len(records)),
-        "avg_tokens": total_tokens / max(1, len(records)),
-        "avg_steps": total_steps / max(1, len(records)),
-        "ckpt_path": str(ckpt_path),
-        "memory_path": str(memory_path),
-        "dataset_json": dataset_json,
-        "decode_mode": "greedy",
-    }
+        summary = {
+            "num_samples": len(records),
+            "accuracy": total_correct / max(1, len(records)),
+            "avg_reward": total_reward / max(1, len(records)),
+            "avg_tokens": total_tokens / max(1, len(records)),
+            "avg_steps": total_steps / max(1, len(records)),
+            "ckpt_path": str(ckpt_path),
+            "memory_path": str(memory_path),
+            "dataset_json": dataset_json,
+            "decode_mode": "greedy",
+        }
 
-    output = {
-        "summary": summary,
-        "records": records,
-    }
+        output = {
+            "summary": summary,
+            "records": records,
+        }
 
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
 
     print("\n===== EVAL SUMMARY =====")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     print(f"[eval] saved to: {output_path}")
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--dataset_json", type=str, default="my_datasets/gsm8k/gsm8k_test.jsonl")
+    parser.add_argument("--llm_name", type=str, default="/home/zhangdi24/Qwen2.5-7B-Instruct")
+    parser.add_argument("--domain", type=str, default="gsm8k")
+    parser.add_argument("--decision_method", type=str, default="FinalRefer")
+    parser.add_argument("--num_rounds", type=int, default=1)
+
+    parser.add_argument("--agent_names", type=str, default="MathSolver,MathSolver,MathSolver,MathSolver")
+    parser.add_argument("--node_roles", type=str, default="MathSolver,ProblemDecomposer,CalculationChecker,ProgrammingExpert")
+
+    parser.add_argument("--save_dir", type=str, default="results/v4_3gsm8k")
+    parser.add_argument("--ckpt_path", type=str, default="results/v4_3gsm8k/checkpoints/router_best.pt")
+    parser.add_argument("--memory_path", type=str, default="results/v3/memory_bootstrap.jsonl")
+    parser.add_argument("--output_path", type=str, default="results/v4_3gsm8k/eval_router_greedy.json")
+
+    parser.add_argument("--alpha_correctness", type=float, default=2.0)
+    parser.add_argument("--beta_tokens", type=float, default=0.00005)
+    parser.add_argument("--gamma_steps", type=float, default=0.02)
+    parser.add_argument("--delta_deadloop", type=float, default=0.20)
+
+    parser.add_argument("--memory_max_size", type=int, default=300)
+    parser.add_argument("--node_threshold", type=float, default=0.35)
+    parser.add_argument("--edge_threshold", type=float, default=0.35)
+    parser.add_argument("--top_k_memory", type=int, default=5)
+    parser.add_argument("--hidden_dim", type=int, default=256)
+    parser.add_argument("--max_steps", type=int, default=5)
+
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-    asyncio.run(evaluate())
+    asyncio.run(evaluate(parse_args()))

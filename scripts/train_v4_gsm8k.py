@@ -24,6 +24,7 @@ from utils.v3_trace_utils import (
 )
 
 from GDesigner.llm.profile_embedding import get_sentence_embedding
+import argparse
 import debugpy
 
 debugpy.listen(("0.0.0.0", 5678))
@@ -157,13 +158,64 @@ async def train_graph_generator_from_memory(
         print(f"  [graph-generator] epoch={epoch + 1}/{epochs} loss={total_loss / max(1, num_batches):.4f}")
 
 
-async def main():
-    dataset_json = "my_datasets/gsm8k/gsm8k_train.jsonl"
-    # llm_name = "/home/zhangdi24/Qwen2.5-7B-Instruct"
-    llm_name = 'Meta-Llama-3.1-8B-Instruct'
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--dataset_json", type=str, default="my_datasets/gsm8k/gsm8k_train.jsonl")
+    # parser.add_argument("--llm_name", type=str, default="Meta-Llama-3.1-8B-Instruct")
+    parser.add_argument("--llm_name", type=str, default="/home/zhangdi24/Llama3-8B-Instruct")
+    # parser.add_argument("--llm_name", type=str, default="/home/zhangdi24/Qwen2.5-7B-Instruct")
+    parser.add_argument("--save_dir", type=str, default="results/v4_4gsm8k")
+    parser.add_argument("--decision_method", type=str, default="FinalRefer")
+    parser.add_argument("--num_rounds", type=int, default=1)
+
+    parser.add_argument("--memory_max_size", type=int, default=300)
+    parser.add_argument("--memory_corrective_max_size", type=int, default=200)
+    parser.add_argument("--prototype_match_threshold", type=float, default=0.72)
+    parser.add_argument("--positive_reward_threshold", type=float, default=0.0)
+    parser.add_argument("--corrective_gap_threshold", type=float, default=0.35)
+    parser.add_argument("--corrective_low_reward_threshold", type=float, default=0.0)
+
+    parser.add_argument("--bootstrap_task_limit", type=int, default=100)
+    parser.add_argument("--keep_top_k_per_task", type=int, default=2)
+    parser.add_argument("--top_k_memory", type=int, default=5)
+
+    parser.add_argument("--node_threshold", type=float, default=0.35)
+    parser.add_argument("--edge_threshold", type=float, default=0.35)
+    parser.add_argument("--hidden_dim", type=int, default=256)
+
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--max_steps", type=int, default=5)
+    parser.add_argument("--add_memory_reward_threshold", type=float, default=0.0)
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gae_lambda", type=float, default=0.95)
+    parser.add_argument("--clip_eps", type=float, default=0.2)
+    parser.add_argument("--value_coef", type=float, default=0.5)
+    parser.add_argument("--entropy_coef", type=float, default=0.01)
+    parser.add_argument("--ppo_epochs", type=int, default=4)
+
+    parser.add_argument("--num_updates", type=int, default=50)
+    parser.add_argument("--batch_episodes", type=int, default=16)
+
+    parser.add_argument("--alpha_correctness", type=float, default=2.0)
+    parser.add_argument("--beta_tokens", type=float, default=0.00005)
+    parser.add_argument("--gamma_steps", type=float, default=0.02)
+    parser.add_argument("--delta_deadloop", type=float, default=0.20)
+    parser.add_argument("--min_steps_free", type=int, default=2)
+    parser.add_argument("--short_trace_penalty", type=float, default=0.15)
+    parser.add_argument("--short_trace_threshold", type=int, default=1)
+
+    parser.add_argument("--log_every", type=int, default=5)
+    parser.add_argument("--export_memory_every", type=int, default=20)
+
+    return parser.parse_args()
+
+async def main(args: argparse.Namespace):
+    dataset_json = args.dataset_json
+    llm_name = args.llm_name
     domain = "gsm8k"
-    decision_method = "FinalRefer"
-    num_rounds = 1
+    decision_method = args.decision_method
+    num_rounds = args.num_rounds
 
     agent_names = ["MathSolver", "MathSolver", "MathSolver", "MathSolver"]
     node_kwargs = [
@@ -173,7 +225,7 @@ async def main():
         {"role": "ProgrammingExpert"},
     ]
 
-    save_dir = Path("results/v6")
+    save_dir = Path(args.save_dir)
     ckpt_dir = save_dir / "checkpoints"
     save_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -207,13 +259,13 @@ async def main():
     #     delta_deadloop=0.20,
     # )
     reward_calculator = V3RewardCalculator(
-        alpha_correctness=2.0,
-        beta_tokens=0.00005,
-        gamma_steps=0.02,
-        delta_deadloop=0.20,
-        min_steps_free=2,
-        short_trace_penalty=0.15,
-        short_trace_threshold=1,
+        alpha_correctness=args.alpha_correctness,
+        beta_tokens=args.beta_tokens,
+        gamma_steps=args.gamma_steps,
+        delta_deadloop=args.delta_deadloop,
+        min_steps_free=args.min_steps_free,
+        short_trace_penalty=args.short_trace_penalty,
+        short_trace_threshold=args.short_trace_threshold,
         use_binary_correctness=True,
     )
     agent_profile_embeddings = build_agent_profile_embeddings(node_kwargs, agent_names)
@@ -280,21 +332,21 @@ async def main():
         router_policy=router_policy,
         router_sampler=router_sampler,
         memory_bank=memory_bank,
-        lr=1e-4,
-        max_steps=5,
-        add_memory_reward_threshold=0.0,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_eps=0.2,
-        value_coef=0.5,
-        entropy_coef=0.01,
-        ppo_epochs=4,
+        lr=args.lr,
+        max_steps=args.max_steps,
+        add_memory_reward_threshold=args.add_memory_reward_threshold,
+        gamma=args.gamma,
+        gae_lambda=args.gae_lambda,
+        clip_eps=args.clip_eps,
+        value_coef=args.value_coef,
+        entropy_coef=args.entropy_coef,
+        ppo_epochs=args.ppo_epochs,
     )
 
     history = []
     best_reward_mean = float("-inf")
-    num_updates = 100
-    batch_episodes = 16
+    num_updates = args.num_updates
+    batch_episodes = args.batch_episodes
 
     print("[V3] Step 6-8: train router under graph constraints and execute the selected trace directly.")
     for update_idx in range(num_updates):
@@ -322,7 +374,7 @@ async def main():
         }
         history.append(record)
 
-        if update_idx % 5 == 0:
+        if update_idx % args.log_every == 0:
             print(
                 f"[router] update={update_idx} | "
                 f"reward_mean={record['reward_mean']:.4f} | "
@@ -359,9 +411,9 @@ async def main():
         with (save_dir / "train_history.json").open("w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
 
-        if (update_idx + 1) % 20 == 0:
+        if (update_idx + 1) % args.export_memory_every == 0:
             memory_bank.export_jsonl(str(save_dir / f"memory_update_{update_idx + 1}.jsonl"))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(parse_args()))

@@ -380,13 +380,154 @@ class MathSolver(Node):
             print(f"#################response:{response}")
         return response
     
+    # def _extract_section(self, text: str, section_name: str) -> str:
+    #     sec = re.escape(section_name)
+    #     current_header = rf"(?:\[\s*{sec}\s*\]|\*\*\s*\[\s*{sec}\s*\]\s*\*\*)"
+    #     any_header = r"(?:\[\s*[A-Z_ ]+\s*\]|\*\*\s*\[\s*[A-Z_ ]+\s*\]\s*\*\*)"
+    #     pattern = rf"^\s*{current_header}\s*:?\s*(.*?)(?=^\s*{any_header}\s*:?\s*|\Z)"
+    #     m = re.search(pattern, text, flags=re.S | re.M | re.I)
+    #     return m.group(1).strip() if m else ""
+    def _unwrap_text(self, text: str) -> str:
+        text = text.strip()
+
+        # 如果传进来的是 repr 形式的字符串，先还原
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+            try:
+                text = ast.literal_eval(text)
+            except Exception:
+                text = text[1:-1].strip()
+
+        return text
+
+
+    def _normalize_header_line(self, line: str) -> str:
+        """
+        把一行可能的标题归一化。
+        例如：
+        [SUMMARY]         -> SUMMARY
+        **[SUMMARY]**     -> SUMMARY
+        SUMMARY:          -> SUMMARY
+        ### [SUMMARY] ### -> SUMMARY
+        """
+        s = line.strip()
+
+        if not s:
+            return ""
+
+        # 反复剥掉常见的外层包裹
+        changed = True
+        while changed and s:
+            changed = False
+
+            # 去掉 markdown 粗体
+            if len(s) >= 4 and s.startswith("**") and s.endswith("**"):
+                s = s[2:-2].strip()
+                changed = True
+
+            # 去掉 markdown 标题符号 ###
+            if s.startswith("#"):
+                s = s.lstrip("#").strip()
+                changed = True
+            if s.endswith("#"):
+                s = s.rstrip("#").strip()
+                changed = True
+
+            # 去掉外层中括号
+            if len(s) >= 2 and s.startswith("[") and s.endswith("]"):
+                s = s[1:-1].strip()
+                changed = True
+
+            # 去掉末尾冒号
+            if s.endswith(":"):
+                s = s[:-1].strip()
+                changed = True
+
+        return s.upper()
+
+
+    def _split_sections(self, text: str, allowed_sections=None) -> dict:
+        """
+        把整段文本切成 sections。
+        allowed_sections: 可选，传入后只识别这些标题，避免误判正文。
+        """
+        text = self._unwrap_text(text)
+        lines = text.splitlines()
+
+        if allowed_sections is not None:
+            allowed = {x.upper() for x in allowed_sections}
+        else:
+            allowed = None
+
+        sections = {}
+        current_name = None
+        buffer = []
+
+        def flush():
+            nonlocal current_name, buffer
+            if current_name is not None:
+                sections[current_name] = "\n".join(buffer).strip()
+            buffer = []
+
+        for line in lines:
+            normalized = self._normalize_header_line(line)
+
+            is_header = False
+            if normalized:
+                if allowed is not None:
+                    is_header = normalized in allowed
+                else:
+                    # 如果不传 allowed_sections，就只把“像标题的全大写短行”当标题
+                    is_header = normalized.replace("_", "").replace(" ", "").isalnum() and normalized == normalized.upper()
+
+            if is_header:
+                flush()
+                current_name = normalized
+            else:
+                if current_name is not None:
+                    buffer.append(line)
+
+        flush()
+        return sections
+
+
     def _extract_section(self, text: str, section_name: str) -> str:
-        sec = re.escape(section_name)
-        current_header = rf"(?:\[\s*{sec}\s*\]|\*\*\s*\[\s*{sec}\s*\]\s*\*\*)"
-        any_header = r"(?:\[\s*[A-Z_ ]+\s*\]|\*\*\s*\[\s*[A-Z_ ]+\s*\]\s*\*\*)"
-        pattern = rf"^\s*{current_header}\s*:?\s*(.*?)(?=^\s*{any_header}\s*:?\s*|\Z)"
-        m = re.search(pattern, text, flags=re.S | re.M | re.I)
-        return m.group(1).strip() if m else ""
+        target = section_name.strip().upper()
+        alt_target = target.replace("_", " ")
+
+        sections = self._split_sections(
+            text,
+            allowed_sections=[
+                target,
+                alt_target,
+                "SUMMARY",
+                "USED_PACKETS",
+                "DERIVATION",
+                "CANDIDATE_ANSWER",
+                "SANITY_CHECK",
+                "FINAL",
+                "VARIABLES",
+                "CONSTRAINTS",
+                "PLAN",
+                "EQUATIONS",
+                "FORMULATION",
+                "PYTHON_CODE",
+                "CODE_RESULT",
+                "TARGET_ANSWER",
+                "RECOMPUTATION",
+                "VERDICT",
+                "ERRORS",
+                "CORRECT_ANSWER",
+                "KEY_STEPS",
+                "CHECK_STEPS",
+            ],
+        )
+
+        if target in sections:
+            return sections[target].strip()
+        if alt_target in sections:
+            return sections[alt_target].strip()
+
+        return ""
     
     def _extract_bullets(self, text: str) -> List[str]:
         lines = []
@@ -654,4 +795,17 @@ class MathSolver(Node):
             code_text = re.sub(r"\s*```$", "", code_text)
             return code_text.strip()
 
+        return ""
+
+    def _extract_answer_hint(self, text: str) -> str:
+        patterns = [
+            r"####\s*Answer:\s*([^\n]+)",
+            r"[Tt]he answer is\s*([^\n\.]+)",
+            r"[Ff]inal answer[:：]\s*([^\n]+)",
+            r"[Cc]andidate[_ ]?[Aa]nswer[:：]?\s*([^\n]+)",
+        ]
+        for p in patterns:
+            m = re.search(p, text)
+            if m:
+                return m.group(1).strip()
         return ""
